@@ -9,13 +9,18 @@ That is the whole palette, not a sample: 16 hues x 2 tones, and a project's crea
 from its path the first time it is seen and then never changes. Draw your own over it whenever
 you would rather have the real logo.
 
-```
-▛▀▜ my-api   add rate limiting to the upload handler
-▙▄▟ ~/code/my-api  ⎇ main↑4  *3?1  👥2  ⠴ deploy ▰▰▰▰▰▱▱▱ 6m34s/10m56s ●◐    ctx 11% · $2.75 · 5h 25% · 7d 86%(2d12h)
-```
+<img src="docs/statusline.png" alt="Two lines: a project icon and name, what the window is doing, then path, branch, working tree, other windows, service health, a deploy progress bar, a backlog count and the context percentage" width="100%">
 
 Local Python, no dependencies, about 55ms per redraw. Everything on that line is something you
-would otherwise have had to go and look up.
+would otherwise have had to go and look up:
+
+<img src="docs/statusline-annotated.png" alt="The same status line with each segment labelled" width="100%">
+
+Both pictures are screenshots of a real run — `tools/render-statusline.py` builds a temporary
+project, a deploy in flight and a healthy service, runs `statusline.py` against them, and
+photographs the output. The labels are positioned by measuring where each segment actually landed,
+so a segment that moves takes its label with it, and one that disappears fails the render instead
+of leaving a line pointing at nothing.
 
 ## Install
 
@@ -78,7 +83,8 @@ the note about `os.replace` below is about.
 | `backlog-status.py` | reads a repository's backlog summary, same arrangement |
 | `usage-report.py` | monthly token usage, summed from local transcripts |
 | `skills/project-icon/` | the procedure for "draw this project an icon" |
-| `tools/render-bestiary.py` | draws the picture at the top, from the code that draws the real ones |
+| `tools/render-bestiary.py` | draws the wall of creatures, from the code that draws the real ones |
+| `tools/render-statusline.py` | screenshots the status line and the labelled version of it |
 
 ## Why a separate repository and symlinks, rather than `git init ~/.claude`
 

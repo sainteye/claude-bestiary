@@ -1,0 +1,41 @@
+{
+  "_readme": "Copy this to ~/.claude/project-icons.json and edit the paths. Each project's colour and pixel creature are generated from its path, written down the first time it is seen, and fixed after that. Edit any of it by hand: hue is 0-15, tone is 0 (pale) or 1 (strong), shape is 0-97 (the combination of ears, legs and eyes), label is the name shown on the status line, and emoji is used for the tab title. Delete an entry and a fresh one is generated the next time you open that project.",
+  "options": {
+    "show_cost": true,
+    "show_limits": true,
+    "show_share": true,
+    "right_reserve": 4
+  },
+  "projects": {
+    "/Users/you/code/my-api": {
+      "label": "my-api",
+      "emoji": "🐙",
+      "hue": 9,
+      "tone": 0,
+      "shape": 35,
+      "health": {
+        "url": "https://example.com/health",
+        "label": "prod",
+        "site": "https://example.com/",
+        "expect": {"status": "ok", "database": true}
+      }
+    },
+    "/Users/you/code/my-site": {
+      "label": "my-site",
+      "emoji": "🦉",
+      "hue": 2,
+      "tone": 1,
+      "shape": 12
+    },
+    "/Users/you/code/hand-drawn": {
+      "label": "hand-drawn",
+      "emoji": "🐢",
+      "art": {
+        "bg": "#2F6B5E",
+        "accent": "#5CBBA1",
+        "palette": {"W": "#EEF6F4"},
+        "rows": [".WWWWW.", ".W...W.", ".W.W.W.", ".W...W."]
+      }
+    }
+  }
+}

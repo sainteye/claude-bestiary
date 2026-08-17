@@ -1,0 +1,28 @@
+# This repository holds the tools and nothing else. What follows blocks shapes that would be an
+# incident the moment they appeared — not because anyone expects them to, but because **nothing
+# else would stop them** if they did.
+#
+# ~/.claude holds 2.8 GB of transcripts (including real medical records from rounds of
+# customer-corpus analysis), every prompt you have ever typed, and snapshots of edited files.
+# This repository is deliberately not under there, so in the normal case none of it can arrive;
+# this is the second line, for a mistyped cp or a mistaken symlink.
+*.jsonl
+history*
+projects/
+file-history/
+shell-snapshots/
+sessions/
+paste-cache/
+image-cache/
+*.log
+
+# Your registry. It holds the absolute path of every project on your machine and often the
+# health endpoints of things you run — it is yours, it is seeded from the example by install.sh,
+# and it must never arrive here by accident.
+project-icons.json
+
+# originals kept aside during install
+*.pre-symlink
+
+__pycache__/
+.DS_Store

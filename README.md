@@ -22,6 +22,19 @@ photographs the output. The labels are positioned by measuring where each segmen
 so a segment that moves takes its label with it, and one that disappears fails the render instead
 of leaving a line pointing at nothing.
 
+> ### Setting this up
+>
+> Paste this repository's address at your Claude Code agent and ask it to set this up.
+> **[docs/connect.md](docs/connect.md) is written for it** — the ordered procedure, the traps,
+> and how to check its own work.
+>
+> *"Set this up — https://github.com/sainteye/claude-bestiary"* is the whole instruction.
+>
+> It also connects you to [Clawdline](https://github.com/sainteye/clawdline) at the same time:
+> the files this writes under `~/.claude/statusline-cache/` are the ones that bar reads, so a
+> project set up here shows its health, its deploy and its backlog there too, with nothing else
+> to keep current.
+
 ## Install
 
 ```bash

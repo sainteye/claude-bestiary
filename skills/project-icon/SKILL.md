@@ -44,6 +44,12 @@ background; every other letter is looked up in `palette`.
 
 - **`bg` fills the whole block**, so the result reads as a small app icon. Leave `bg` out and
   those cells show the terminal's background through them.
+- **A row wider than its neighbours needs `bg`.** The four rows fold into two lines of text with
+  half blocks, so the outer cells of a wide row — a creature's arms, or its ears — get half a
+  block with the terminal showing through the rest, and read as fragments floating beside the
+  shape rather than as arms. `bg` closes them into the block. Anything drawing the same registry
+  at full height keeps the four rows as four rows and shows it correctly, so a shape that looks
+  right there can still be wrong here.
 - **`accent` is the status line's text colour, not the logo's main colour.** A brand's dark
   colour used for text is unreadable on a dark terminal — lift it until it reads, and keep the
   brand's hue. The greys for the path, branch and cost are derived from it automatically.

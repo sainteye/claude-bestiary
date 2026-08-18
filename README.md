@@ -54,6 +54,7 @@ elapsed time sit still, which looks exactly like a hang.
 | `👥2` | other Claude Code windows alive in the same project |
 | `⠴ deploy ▰▰▰▰▱▱▱▱` | a run in flight, against how long that workflow usually takes |
 | `● prod` | a live service, and how recently that was confirmed |
+| `● prod ↑3` | that service is running three commits behind what you are holding |
 | `≡53 now2` | a backlog, and how much of it is overdue |
 | `ctx · $ · 5h · 7d · project%` | context, cost, both quota windows, and this project's share of them |
 
@@ -149,6 +150,48 @@ configuration that is permanently red.
 **A check with no threshold does not get one made up.** If a service reports counts you do not
 know the normal value of, leave them out. **Inventing a threshold produces false alarms, and
 false alarms train you to ignore the light.**
+
+### Which version is actually live
+
+Add `version_key`, and the same light says how far production is from the commit in your hands:
+
+```json
+"health": {
+  "url": "https://example.com/health",
+  "expect": {"status": "ok"},
+  "version_key": "commit"
+}
+```
+
+| shown | means |
+|---|---|
+| `● prod` | production is the commit you are holding |
+| `● prod ↑3` | three of your commits are not live yet |
+| `● prod ↓2` | production is **ahead** of you — someone else deployed, go and pull |
+| `● prod ↑3↓2` | the two have diverged |
+| `● prod @1.4.2` | it reported something git cannot measure a distance against |
+
+The service has to report its own build, as one field in the health response — `{"status": "ok",
+"commit": "d47a60c"}`. That requirement *is* the feature: **only the thing serving requests knows
+what it is running.** The `↑n` next to the branch compares you against `origin` and goes quiet the
+moment you push; the deploy cell knows only what CI last *built*. Neither can tell you the machine
+is still serving last Tuesday's code — after a rollback, a failed restart, or a deploy nobody
+triggered.
+
+`version_key` takes a dotted path (`build.commit`) for nested JSON, and is optional: without it the
+usual names are tried (`commit`, `git_commit`, `sha`, `revision`, `build`, `version`). `git
+describe` output is understood — `v1.2.3-5-gd47a60c`, with or without a `-dirty` suffix — because
+that is what build scripts actually write, and the commit is right there inside it.
+
+**The distance is measured on every redraw rather than stored.** Its other half is your local HEAD,
+which changes between probes: computed in the background it would be wrong for the minute after you
+commit, which is exactly the minute you look at it. It costs one `git rev-list` — 5.9ms, against a
+redraw budget of 55ms — and only when the two SHAs differ, which is never the case once you are in
+sync.
+
+A value git cannot measure against shows as `@1.4.2` rather than as nothing, and so does a SHA this
+clone has never fetched. **An empty space there reads as "in sync", which is the one thing it does
+not mean.**
 
 ## Monthly usage: tokens are countable, money is not
 

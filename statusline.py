@@ -360,7 +360,7 @@ def git_state(cwd):
     """
     # Count **files**, not presence: "something is uncommitted" and "eleven files are
     # uncommitted" are different facts, and only the second one decides whether to stop now.
-    out = {"branch": "", "ahead": 0, "behind": 0,
+    out = {"branch": "", "head": "", "ahead": 0, "behind": 0,
            "staged": 0, "unstaged": 0, "untracked": 0, "conflict": 0}
     try:
         env = dict(os.environ, GIT_OPTIONAL_LOCKS="0")
@@ -372,7 +372,12 @@ def git_state(cwd):
     except Exception:
         return out
     for line in r.stdout.splitlines():
-        if line.startswith("# branch.head "):
+        # The commit you are holding, which the health light needs to say how far production
+        # is from it. **Free**: this command already prints it, so it costs no second process.
+        if line.startswith("# branch.oid "):
+            oid = line[13:].strip()
+            out["head"] = "" if oid == "(initial)" else oid
+        elif line.startswith("# branch.head "):
             head = line[14:].strip()
             out["branch"] = "" if head == "(detached)" else head
         elif line.startswith("# branch.ab "):
@@ -515,7 +520,78 @@ def deploy_segment(cwd, repo, ahead=0):
     return None
 
 
-def health_segment(entry, proj):
+def looks_like_sha(v):
+    """Is this a value `git` could be pointed at? Hex, and long enough to be unambiguous."""
+    return 7 <= len(v) <= 40 and all(c in "0123456789abcdefABCDEF" for c in v)
+
+
+def sha_in(value):
+    """The revision inside a reported version string, if there is one to find.
+
+    A service rarely reports a bare SHA. `git describe` — which is what most build scripts
+    reach for — writes `v1.2.3-5-gd47a60c`, and a tree that was not clean when it was built
+    adds `-dirty`. **Both still name an exact commit**, and refusing to look inside them would
+    answer "cannot measure" to a question that has a precise answer.
+    """
+    v = value.strip()
+    if v.endswith("-dirty"):
+        v = v[:-6]
+    if looks_like_sha(v):
+        return v
+    tail = v.rsplit("-g", 1)[-1] if "-g" in v else ""
+    return tail if tail and looks_like_sha(tail) else ""
+
+
+def version_gap(cwd, head, live):
+    """How far the version production reports is from the commit you are holding.
+
+    This is the question `↑n` next to the branch does *not* answer: that one compares you with
+    `origin`, so it goes quiet the moment you push — while the thing serving requests can sit
+    ten commits back for an hour. And it is not the deploy cell's question either, which knows
+    only what CI last *built*. **Only the service can say what it is actually running**, so this
+    is computed from what it reported, and drawn nowhere else.
+
+        (nothing)   the same commit — production is you, and a mark that is always there is
+                    decoration nobody reads
+        ↑3          three of your commits are not live yet
+        ↓2          production is two ahead of you — someone else deployed, go and pull
+        ↑3↓2        the two have diverged
+        @1.4.2      it reported something git cannot measure against — an unknown revision, a
+                    semantic version, another repository. **Say what it is rather than nothing**:
+                    a blank cell here reads as "in sync", which is the one thing it does not mean.
+
+    The comparison is made here, in the foreground, rather than by the probe that fetched the
+    version: **its other half is your local HEAD, which changes between probes.** Computed in
+    the background it would be stale exactly when you care — in the minute after you commit.
+    That costs nothing on the common path, where the two SHAs are equal and no process is run
+    at all; the one `git rev-list` on the path that remains was measured at 5.9ms against a
+    redraw budget of 55ms.
+    """
+    if not live:
+        return None
+    sha = sha_in(live)
+    if head and sha:
+        n = min(len(head), len(sha))
+        if head[:n].lower() == sha[:n].lower():
+            return None                     # the same commit; there is nothing to report
+        try:
+            env = dict(os.environ, GIT_OPTIONAL_LOCKS="0")
+            r = subprocess.run(
+                ["git", "-C", cwd, "rev-list", "--left-right", "--count", "%s...HEAD" % sha],
+                capture_output=True, text=True, timeout=1.5, env=env)
+            if r.returncode == 0:
+                behind, ahead = (int(x) for x in r.stdout.split())
+                # left = commits live has and you do not (you are behind), right = the reverse
+                return ("↑%d" % ahead if ahead else "") + ("↓%d" % behind if behind else "") \
+                    or None
+        except Exception:
+            pass
+    # A revision this clone does not have (never fetched, a shallow clone, a different
+    # repository) or not a revision at all. It is still worth naming.
+    return "@" + live[:12]
+
+
+def health_segment(entry, proj, cwd="", head=""):
     """Service health: one light.
 
     **A green light is alive, not painted on.** A tick that is always there looks exactly like a
@@ -525,6 +601,7 @@ def health_segment(entry, proj):
 
         ● prod        green   confirmed within two minutes, everything matched
         ● prod        grey    still fine, but the probe has been quiet for a while
+        ● prod ↑3     green   well, and running three commits behind what you are holding
         ⚠ prod ?12m   yellow  the probe stopped, or never ran — **unknown, not fine**
         ✗ prod mongo=false  red   genuinely broken, and it says which key
         ⚠ prod ?(offline)   grey  our network is down, production is not
@@ -582,10 +659,19 @@ def health_segment(entry, proj):
         # Our network, not production. Do not alarm, and do not pretend to know it is well
         return osc8(site, paint("⚠ %s ?(offline)" % label, fg((150, 145, 140))))
     if state == "ok":
+        # Which version is answering, against the one you are holding. Only on the healthy
+        # path, and for a reason: when it is broken, **the key that failed is a better use of
+        # the same width**, and it is already there. The mark is deliberately not alarm-coloured
+        # — being a few commits ahead of production is the normal state of a working day, not a
+        # fault, and a light that cries about the ordinary gets ignored when it matters.
+        gap = version_gap(cwd, head, (data or {}).get("version"))
+        tail = paint(" " + gap, fg((150, 145, 140))) if gap else ""
         if age <= 180:
-            return osc8(site, paint("● " + label, fg((90, 200, 120))))    # just confirmed
+            return osc8(site, paint("● " + label, fg((90, 200, 120))) + tail)   # just confirmed
         if age <= 600:
-            return osc8(site, paint("● " + label, fg((110, 130, 115))))   # fine, but ageing
+            return osc8(site, paint("● " + label, fg((110, 130, 115))) + tail)  # fine, ageing
+        # Past here the probe itself has stopped, so its version is as unknown as its verdict.
+        # **Do not print a distance measured from a fact nobody has checked in ten minutes.**
         # More than ten minutes without an update means the probe stopped. **This must not stay
         # green.**
         return osc8(cfg["url"], paint("⚠ %s ?%s" % (label, fmt_elapsed(age)),
@@ -936,7 +1022,7 @@ def main():
     if n_sib:
         # How many other windows are alive here. With a shared worktree, nothing else says so.
         env_parts.append(paint("👥%d" % n_sib, fg((230, 160, 60))))
-    hp = health_segment(entry, proj)
+    hp = health_segment(entry, proj, cwd, git["head"])
     if hp:
         env_parts.append(hp)
     dep = deploy_segment(cwd, ws.get("repo"), git["ahead"])

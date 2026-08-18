@@ -17,7 +17,8 @@
         "url": "https://example.com/health",
         "label": "prod",
         "site": "https://example.com/",
-        "expect": {"status": "ok", "database": true}
+        "expect": {"status": "ok", "database": true},
+        "version_key": "commit"
       }
     },
     "/Users/you/code/my-site": {

@@ -727,7 +727,7 @@ def _backlog_stale(data):
         return time.time() - (data.get("updated_at") or 0) > 3600
 
 
-def backlog_segment(cwd, proj):
+def backlog_segment(proj):
     """What is still owed: a number and a Cmd-clickable path.
 
         ≡ 53          grey   53 items on the list, none of them due now
@@ -745,6 +745,15 @@ def backlog_segment(cwd, proj):
     A project with no backlog returns None rather than 0: **"nothing outstanding" and "this
     project does not have this at all" are different facts**, and drawing them identically
     suggests a project has finished everything.
+
+    **One argument on purpose.** This took `cwd` as well and probed that, while keying the cache
+    on `proj` — and those two are not the same thing: `project_dir` is the repository the line is
+    describing, `current_dir` is wherever the shell has been `cd`-ed to since. A session opened
+    in one repository that ran commands in another therefore wrote the second repository's
+    backlog into the first one's cache file, and the status line then reported it as the first
+    one's for as long as that file stayed fresh (seen 2026-08-18: one project's 46 items shown under
+    Clawdline, which has no backlog at all). Taking one path removes the chance of the pair
+    disagreeing rather than relying on the caller to pass matching ones.
     """
     key = "".join(c if c.isalnum() or c in "-_" else "-" for c in proj)[-48:]
     path = os.path.join(CACHE_DIR, "backlog-%s.json" % key)
@@ -772,7 +781,7 @@ def backlog_segment(cwd, proj):
             open(path, "a").close()
             os.utime(path, None)      # stamp first, so many windows do not all spawn one
             subprocess.Popen(
-                [sys.executable, os.path.join(HOME, ".claude", "backlog-status.py"), cwd, path],
+                [sys.executable, os.path.join(HOME, ".claude", "backlog-status.py"), proj, path],
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                 start_new_session=True)
         except Exception:
@@ -933,7 +942,7 @@ def main():
     dep = deploy_segment(cwd, ws.get("repo"), git["ahead"])
     if dep:
         env_parts.append(dep)
-    bl = backlog_segment(cwd, proj)
+    bl = backlog_segment(proj)
     if bl:
         env_parts.append(bl)
     if model:

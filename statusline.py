@@ -798,15 +798,22 @@ def skip_escape(s, i):
 def _backlog_stale(data):
     """Whether this cache still holds — **judged on whether the source changed, not on age**.
 
-    Three cases need a recount: no cache, an old-format cache (no `source`), and a source newer
-    than the cache. When the source cannot be stat'd — the repository moved, a mount went away —
-    it falls back to an hour, so it cannot get stuck forever on a number that can never refresh.
+    Three cases need a recount: no cache, a cache with no `source`, and a source newer than the
+    cache. When the source cannot be stat'd — the repository moved, a mount went away — it falls
+    back to an hour, so it cannot get stuck forever on a number that can never refresh.
+
+    **A missing `source` is a timer, not an immediate recount.** It used to return True outright,
+    and the payload written for a repository with no backlog at all has no `source` — so the very
+    file whose comment says "the status line stops calling this" was the thing that guaranteed it
+    kept calling. Measured 2026-08-19 on a repository without a probe: a fresh subprocess roughly
+    every five seconds, per window, indefinitely. The same branch covers a genuinely old-format
+    cache, which now upgrades within the window instead of on the next render.
     """
     if not data:
         return True
     src = data.get("source")
     if not src:
-        return True
+        return time.time() - (data.get("updated_at") or 0) > 900
     try:
         return os.path.getmtime(src) > (data.get("source_mtime") or 0)
     except OSError:
@@ -837,8 +844,8 @@ def backlog_segment(proj):
     describing, `current_dir` is wherever the shell has been `cd`-ed to since. A session opened
     in one repository that ran commands in another therefore wrote the second repository's
     backlog into the first one's cache file, and the status line then reported it as the first
-    one's for as long as that file stayed fresh (seen 2026-08-18: one project's 46 items shown under
-    Clawdline, which has no backlog at all). Taking one path removes the chance of the pair
+    one's for as long as that file stayed fresh (seen 2026-08-18: another repository's 46 items
+    shown under Clawdline, which has no backlog at all). Taking one path removes the chance
     disagreeing rather than relying on the caller to pass matching ones.
     """
     key = "".join(c if c.isalnum() or c in "-_" else "-" for c in proj)[-48:]

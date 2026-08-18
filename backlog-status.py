@@ -13,7 +13,7 @@ Computing it a second time somewhere else ends the same way every time: the two 
 eventually disagree, and **nobody notices that drift**, because the number on the status line
 goes on looking correct.
 
-## The shape of the cache file (generic; one project is just the first producer)
+## The shape of the cache file (generic; the first producer to write one was a web app)
 
     {"total": 53,
      "lanes": {"now": 2, "scheduled": 10, "waiting": 19, "drop": 22},
@@ -32,7 +32,7 @@ second answer.
 
 Any project whose command prints this shape gets drawn. **`ok: false` exists on purpose**: "this
 repository has no backlog" and "it has one and reading it failed" are not the same thing, and a
-blank draws them identically (the same lesson as a `root_exists` flag elsewhere).
+blank draws them identically — the same lesson a `root_exists` flag taught elsewhere.
 """
 import json
 import os
@@ -45,14 +45,24 @@ TIMEOUT = 20
 #: Where to ask. **A list of (python, script) relative paths rather than one hard-coded
 #: command**: the next project's venv will not necessarily live under backend/, and adding a
 #: row is cheaper than changing logic.
+# Where a repository keeps the thing that can count its backlog.
+#
+# `""` for the interpreter means "whatever python is running this", which is what a repository
+# with no virtualenv needs — and a tool that made a venv a condition of being counted would only
+# ever find projects shaped like the first one.
+#
+# **This list is the only thing standing between a repository and being invisible here.** Adding a
+# convention is cheap; a project that has a backlog and is never asked for it looks identical to a
+# project that has none.
 PROBES = [
     ("backend/.venv/bin/python", "backend/scripts/build_backlog_artifact.py"),
+    ("", "tools/backlog.py"),
 ]
 
 
 def probe(repo):
     for py, script in PROBES:
-        py_path = os.path.join(repo, py)
+        py_path = os.path.join(repo, py) if py else sys.executable
         script_path = os.path.join(repo, script)
         if not (os.path.isfile(py_path) and os.path.isfile(script_path)):
             continue

@@ -251,6 +251,9 @@ the top and bottom halves of a cell separately, so one line of text holds two ro
 **The status line never touches the network.** Deploy, health and usage all read a cache file, and
 a stale one spawns a detached process to refresh it. The cache format has nothing to do with
 GitHub: anything that writes `{state, label, started_at, typical_seconds, steps}` gets drawn.
+Writing those files from a deploy script of your own has one rule that is not part of the shape —
+**[docs/producers.md](docs/producers.md)** is that contract, and without its `producer: "local"`
+the background poller overwrites your file about five seconds after you write it.
 
 **A progress bar rather than a spinner.** It is based on the median of that workflow's recent real
 runs, so it reads correctly however slow the redraws are. The spinner is incidental.

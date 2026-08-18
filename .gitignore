@@ -26,3 +26,8 @@ project-icons.json
 
 __pycache__/
 .DS_Store
+
+# serena's index and its notes about this checkout, written by whichever agent is working here.
+# Not ignored until 2026-08-19, and `memories/` is the sort of place a project's real names end
+# up without anyone deciding they should.
+.serena/

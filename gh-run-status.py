@@ -65,8 +65,46 @@ def write(path, payload):
     os.replace(tmp, path)
 
 
+#: How long a local deploy's own status stays authoritative. Two numbers because they answer
+#: different questions: **while it runs** we must not let a stale CI verdict overwrite what is
+#: happening right now; **after it ends** the verdict is worth reading for a while, and then it
+#: is history. The running one is deliberately generous — a slow deploy is still a deploy — but
+#: it is not infinite, because a script killed mid-flight would otherwise spin forever.
+LOCAL_RUNNING_TTL = 1800
+LOCAL_DONE_TTL = 900
+
+
+def local_deploy_holds(out):
+    """Is a local deploy (`make gcp-deploy`) currently the truth about deployment?
+
+    Both producers write the same file, so one of them has to give way. The local one wins
+    while it is fresh, for a plain reason: **it is the one actually shipping.** When CI is
+    disabled — which is exactly when the local path gets used — the newest GitHub run is a
+    stale failure that has nothing to do with what is on the wire right now.
+    """
+    try:
+        with open(out, encoding="utf-8") as f:
+            cur = json.load(f)
+    except Exception:
+        return False
+    if cur.get("producer") != "local":
+        return False
+    age = time.time() - (cur.get("updated_at") or 0)
+    return age < (LOCAL_RUNNING_TTL if cur.get("state") == "running" else LOCAL_DONE_TTL)
+
+
+#: How long a *failed* CI run keeps showing. A tick already expires after 15 minutes in the
+#: status line ("a permanent tick is decoration nobody reads") while a cross used to stay
+#: forever — and a light that is always red is indistinguishable from a broken light. Failures
+#: earn far longer than successes, but not eternity. Whether production is actually healthy is
+#: a different cell's job (the health light), and that one is live.
+FAIL_TTL = 6 * 3600
+
+
 def main():
     repo, out = sys.argv[1], sys.argv[2]
+    if local_deploy_holds(out):
+        return
     gh = gh_bin()
     if not gh:
         write(out, {"state": "none", "why": "no-gh"})
@@ -115,10 +153,32 @@ def main():
             durs.append(b - a)
     durs.sort()
     typical = durs[len(durs) // 2] if durs else None
+    # A disabled workflow's last failure is not news — it is a headstone. Nothing will ever
+    # replace it, so without this it stays red forever, and a light that is always red is
+    # indistinguishable from a broken one. (This is the state you are in right after switching
+    # deploys to a local path because CI cannot run.)
+    if state == "fail":
+        wf_raw = run([gh, "workflow", "list", "--all", "--json", "name,state"], repo, 8)
+        try:
+            disabled = {w.get("name") for w in json.loads(wf_raw or "[]")
+                        if w.get("state") != "active"}
+        except Exception:
+            disabled = set()
+        if r.get("workflowName") in disabled:
+            write(out, {"state": "none", "why": "workflow-disabled"})
+            return
+
+    started = epoch(r.get("startedAt") or r.get("createdAt"))
+    if state == "fail" and started and time.time() - started > FAIL_TTL:
+        # Old news. Keep `why` so the next person reading this file can tell "nothing to show"
+        # apart from "the poller is broken" — the same distinction the empty-list rule makes.
+        write(out, {"state": "none", "why": "stale-fail"})
+        return
+
     payload = {
         "state": state,
         "label": (r.get("workflowName") or "ci").lower().split()[0],
-        "started_at": epoch(r.get("startedAt") or r.get("createdAt")),
+        "started_at": started,
         "typical_seconds": typical,
         "sha": (r.get("headSha") or "")[:7],
         "title": (r.get("displayTitle") or "")[:60],

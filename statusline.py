@@ -730,6 +730,37 @@ def share_segment(proj):
     return "project %s%%" % (("%.1f" % share).rstrip("0").rstrip("."))
 
 
+def save_limits(limits, session_id):
+    """Write the plan's windows down, for whoever is not looking at this terminal.
+
+    Claude Code hands `rate_limits` to the status line on stdin and nowhere else — not the
+    transcript, not a file — so the 5h and 7d percentages exist for as long as this process does.
+    Clawdline's Session info card wants the same two numbers on a phone, and reads this file.
+    The windows are the account's, not the session's, so there is one file; `session_id` says
+    which render wrote it last. Skipped when nothing changed: a render every two seconds that
+    rewrote an identical file would be churn for its own sake.
+    """
+    if not isinstance(limits, dict) or not limits:
+        return
+    path = os.path.join(CACHE_DIR, "rate-limits.json")
+    try:
+        try:
+            with open(path, encoding="utf-8") as f:
+                if (json.load(f) or {}).get("rate_limits") == limits:
+                    return
+        except (OSError, ValueError):
+            pass
+        os.makedirs(CACHE_DIR, exist_ok=True)
+        tmp = path + ".tmp.%d" % os.getpid()
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump({"at": int(time.time()), "session_id": session_id, "rate_limits": limits},
+                      f, ensure_ascii=False, indent=2, sort_keys=True)
+            f.write("\n")
+        os.replace(tmp, path)
+    except Exception:
+        pass
+
+
 def fmt_until(epoch):
     """How long until the reset. 86% decides nothing; "2 days 6 hours left" decides things."""
     try:
@@ -997,6 +1028,7 @@ def main():
     used = ctx.get("used_percentage")
     cost = (data.get("cost") or {}).get("total_cost_usd")
     limits = data.get("rate_limits") or {}
+    save_limits(limits, session_id)
 
     doing = data.get("session_name")
     if not doing and session_id and data.get("transcript_path"):

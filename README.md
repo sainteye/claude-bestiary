@@ -96,6 +96,7 @@ the note about `os.replace` below is about.
 | `health-check.py` | probes a service in the background, same arrangement |
 | `backlog-status.py` | reads a repository's backlog summary, same arrangement |
 | `usage-report.py` | monthly token usage, summed from local transcripts |
+| `~/.claude/statusline-cache/rate-limits.json` | the 5h and 7d windows, as Claude Code last handed them to `statusline.py` — written on every change, for readers that never see that stdin (Clawdline's Session info card) |
 | `skills/project-icon/` | the procedure for "draw this project an icon" |
 | `tools/render-bestiary.py` | draws the wall of creatures, from the code that draws the real ones |
 | `tools/render-statusline.py` | screenshots the status line and the labelled version of it |

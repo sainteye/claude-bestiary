@@ -97,6 +97,7 @@ the note about `os.replace` below is about.
 | `backlog-status.py` | reads a repository's backlog summary, same arrangement |
 | `usage-report.py` | monthly token usage, summed from local transcripts |
 | `~/.claude/statusline-cache/rate-limits.json` | the 5h and 7d windows, as Claude Code last handed them to `statusline.py` — written on every change, for readers that never see that stdin (Clawdline's Session info card) |
+| `~/.claude/statusline-cache/session-<id>.json` | the same arrangement for what belongs to one conversation: `context_window` and `cost`, copied through whole. The window's **size** lives in that stdin and nowhere else — not the transcript, not `~/.claude/sessions/` — so without this file no reader can turn token counts into a percentage. Pruned after three days idle |
 | `skills/project-icon/` | the procedure for "draw this project an icon" |
 | `tools/render-bestiary.py` | draws the wall of creatures, from the code that draws the real ones |
 | `tools/render-statusline.py` | screenshots the status line and the labelled version of it |

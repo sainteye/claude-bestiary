@@ -761,6 +761,85 @@ def save_limits(limits, session_id):
         pass
 
 
+def save_session(session_id, ctx, cost):
+    """Write this conversation's context fill and running cost down, for the same reader.
+
+    `save_limits` above explains the arrangement; this is the half that is about *this session*
+    rather than the account. Claude Code hands `context_window` and `cost` to the status line on
+    stdin and nowhere else, and the context window's **size** is written down nowhere at all —
+    not in the transcript, not in `~/.claude/sessions/<pid>.json` — so a reader downstream cannot
+    recover the percentage from token counts however hard it tries. It has to be handed the
+    percentage or go without one.
+
+    Both objects go in whole rather than picked apart. What Claude Code puts beside
+    `used_percentage` and `total_cost_usd` has changed before and will again, and a writer that
+    copies the object through costs nothing and dates more slowly than one that names fields.
+
+    One file per session, keyed by the id: unlike the plan's windows these numbers belong to one
+    conversation, and two windows sharing a file would each erase the other's answer. `at` is
+    what lets a reader tell a live reading from the one a closed session left behind.
+    """
+    if not session_id or (not isinstance(ctx, dict) and not isinstance(cost, dict)):
+        return
+    body = {"at": int(time.time()), "session_id": session_id}
+    if isinstance(ctx, dict) and ctx:
+        body["context_window"] = ctx
+    if isinstance(cost, dict) and cost:
+        body["cost"] = cost
+    if len(body) == 2:
+        return
+    path = os.path.join(CACHE_DIR, "session-%s.json" % session_id)
+    try:
+        try:
+            with open(path, encoding="utf-8") as f:
+                was = json.load(f) or {}
+                if (was.get("context_window") == body.get("context_window")
+                        and was.get("cost") == body.get("cost")):
+                    return
+        except (OSError, ValueError):
+            pass
+        os.makedirs(CACHE_DIR, exist_ok=True)
+        tmp = path + ".tmp.%d" % os.getpid()
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(body, f, ensure_ascii=False, indent=2, sort_keys=True)
+            f.write("\n")
+        os.replace(tmp, path)
+        prune_sessions()
+    except Exception:
+        pass
+
+
+def prune_sessions(keep_days=3, every=21600):
+    """Drop the files of sessions nobody has rendered in days.
+
+    One file per session means one file per session *ever*, and the directory beside it is
+    otherwise a fixed handful of names. Stamped like the probes above so that many windows do not
+    all walk the directory at once — and only ever reached from a write, so a machine with no
+    Claude Code running on it does no work here at all.
+    """
+    stamp = os.path.join(CACHE_DIR, "sessions.pruned")
+    try:
+        if time.time() - os.path.getmtime(stamp) < every:
+            return
+    except OSError:
+        pass
+    try:
+        open(stamp, "a").close()
+        os.utime(stamp, None)          # stamp first, so a slow walk is not repeated meanwhile
+        cutoff = time.time() - keep_days * 86400
+        for name in os.listdir(CACHE_DIR):
+            if not name.startswith("session-") or not name.endswith(".json"):
+                continue
+            old = os.path.join(CACHE_DIR, name)
+            try:
+                if os.path.getmtime(old) < cutoff:
+                    os.remove(old)
+            except OSError:
+                pass
+    except Exception:
+        pass
+
+
 def fmt_until(epoch):
     """How long until the reset. 86% decides nothing; "2 days 6 hours left" decides things."""
     try:
@@ -1026,9 +1105,11 @@ def main():
 
     ctx = data.get("context_window") or {}
     used = ctx.get("used_percentage")
-    cost = (data.get("cost") or {}).get("total_cost_usd")
+    spend = data.get("cost") or {}
+    cost = spend.get("total_cost_usd")
     limits = data.get("rate_limits") or {}
     save_limits(limits, session_id)
+    save_session(session_id, ctx, spend)
 
     doing = data.get("session_name")
     if not doing and session_id and data.get("transcript_path"):

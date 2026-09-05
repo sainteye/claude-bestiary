@@ -122,57 +122,89 @@ def check(name, ok):
         bad.append(name)
 
 
-def produced(proj):
-    """The filename `test.sh` writes, spelled out rather than asked for.
+def produced(prefix, proj):
+    """The filename a producer writes, spelled out rather than asked for.
 
     Every fixture below is named this way **on purpose**: a check that names the file by calling
     the function it is checking agrees with the reader no matter what the reader decides, which
     is exactly the failure this whole correction is about. `sed 's|/|-|g'` is the producer, and
-    this line is that `sed`.
+    this line is that `sed` — for `run-`, and since 2026-09-05 for `health-` and `backlog-` too.
     """
-    return "run-%s.json" % proj.replace("/", "-")
+    return "%s-%s.json" % (prefix, proj.replace("/", "-"))
+
+
+def write(prefix, proj, payload):
+    """Put one fixture in the scratch directory under the name a producer would give it."""
+    with open(os.path.join(tmp, produced(prefix, proj)), "w") as f:
+        json.dump(payload, f)
 
 
 def draw(proj=None, **payload):
-    """Write one fixture the way a producer would, and return what the cell draws for it."""
+    """Write one run fixture the way `test.sh` would, and return what the cell draws for it."""
     proj = proj or PROJ
-    with open(os.path.join(tmp, produced(proj)), "w") as f:
-        json.dump(payload, f)
+    write("run", proj, payload)
     return sl.run_segment(proj)
 
 
 # The name is the whole project directory with every `/` turned into `-`, and **nothing else**:
-# not the characters, and above all not the length. `run-` has one producer and two readers, and
-# the producer writes one filename, so the reader does not get to hold an opinion about it.
+# not the characters, and above all not the length. One rule, and it names all three of this
+# repository's per-tree files. The key is an interface Clawdline reads too, and a reader does not
+# get to hold an opinion about a name it did not choose.
 check("the key is the path, `/` and nothing else",
-      sl.run_key("/Users/x/code/clawdline") == "-Users-x-code-clawdline")
+      sl.path_key("/Users/x/code/clawdline") == "-Users-x-code-clawdline")
 check("a space survives, because the producer's `sed` leaves it alone",
-      sl.run_key("/Users/x/Application Support/y") == "-Users-x-Application Support-y")
+      sl.path_key("/Users/x/Application Support/y") == "-Users-x-Application Support-y")
 check("no file draws nothing", sl.run_segment("/Users/nobody/code/absent") is None)
 
-# `[-48:]` is lossy, and both halves of that are checked here rather than described.
-LONG = "/Users/sainteye/Library/Application Support/Clawdline/worktrees/bestiary/" + "a" * 20
-check("a key longer than 48 characters is not shortened", len(sl.run_key(LONG)) > 48)
-check("a long path's file is still found",
-      draw(proj=LONG, state="running", label="test", updated_at=NOW) is not None)
 
-# Two trees under one parent, differing only in a name 48 characters from the end. `path_key()`
-# gives them one filename; one project's test run under another project's name is worse than
-# nothing on screen, which is the whole reason this cell does not use it.
+def truncating(path):
+    """The rule `health-` and `backlog-` were named by until 2026-09-05, kept here so the two
+    checks below stay a demonstration rather than a description of one."""
+    return "".join(c if c.isalnum() or c in "-_" else "-" for c in path)[-48:]
+
+
+# `[-48:]` is lossy, and both halves of that are checked rather than described: a long key is
+# not shortened, and two trees differing only outside their last 48 characters keep separate
+# files. `run-` was the first file named this way and these were its checks; `health-` and
+# `backlog-` now share the rule, so they share the checks — one loop over the three, rather
+# than the same paragraph written out three times.
+LONG = "/Users/sainteye/Library/Application Support/Clawdline/worktrees/bestiary/" + "a" * 20
 TAIL = "/worktrees/d710b7de-f565-41e4-a8b8-12177537893a/repo"      # 52 characters, so the part
 TWIN_A = "/Users/sainteye/code/alpha" + TAIL                        # that differs falls outside
 TWIN_B = "/Users/sainteye/code/bravo" + TAIL                        # the last 48 of either
-check("the twins collide under the truncating rule",
-      sl.path_key(TWIN_A) == sl.path_key(TWIN_B))
-check("the twins do not collide under this one", sl.run_key(TWIN_A) != sl.run_key(TWIN_B))
-check("one twin's run is not drawn under the other's name",
-      draw(proj=TWIN_A, state="running", label="test", updated_at=NOW) is not None
-      and sl.run_segment(TWIN_B) is None)
 
-# And `path_key()` itself is left exactly as it was. `health-` and `backlog-` are written and
-# read by this repository alone, so their names are nobody else's business — and renaming them
-# would rename a file for every project on this Mac.
-check("path_key still truncates, deliberately", len(sl.path_key(LONG)) == 48)
+check("a key longer than 48 characters is not shortened", len(sl.path_key(LONG)) > 48)
+check("the twins would collide under the truncating rule",
+      truncating(TWIN_A) == truncating(TWIN_B))
+check("the twins do not collide under this one", sl.path_key(TWIN_A) != sl.path_key(TWIN_B))
+
+# One registry entry, so `health_segment()` gets past its "not configured" return.
+REGISTRY = {"health": {"url": "https://example.invalid/health",
+                       "site": "https://example.invalid/", "label": "prod"}}
+
+# Each fixture carries a number that reaches the screen, so "the cell drew something" and "the
+# cell drew *this tree's* file" stay different questions — a collision passes the first.
+CELLS = (
+    ("run", lambda n: dict(state="running", label="run%d" % n, updated_at=NOW),
+     lambda proj: sl.run_segment(proj)),
+    ("health", lambda n: dict(state="ok", label="h%d" % n, checked_at=NOW),
+     lambda proj: sl.health_segment(REGISTRY, proj)),
+    # `source_mtime` far in the future so `_backlog_stale()` says the count still holds: a
+    # fixture must never spawn the real producer at the real cache.
+    ("backlog", lambda n: dict(ok=True, total=n, lanes={"now": 2},
+                               source=os.path.join(repo, "statusline.py"),
+                               source_mtime=NOW + 10 ** 6),
+     lambda proj: sl.backlog_segment(proj)),
+)
+MARKS = ((PROJ, 101), (LONG, 202), (TWIN_A, 303))
+
+for prefix, fixture, cell in CELLS:
+    for proj, n in MARKS:
+        write(prefix, proj, fixture(n))
+    check("%s- still draws for a short path" % prefix, "101" in (cell(PROJ) or ""))
+    check("%s- finds a long path's file" % prefix, "202" in (cell(LONG) or ""))
+    check("%s- does not draw one twin's file under the other's name" % prefix,
+          "303" not in (cell(TWIN_B) or ""))
 
 running = dict(state="running", label="test", started_at=NOW - 120,
                typical_seconds=288, updated_at=NOW)
@@ -227,7 +259,7 @@ check("a label is not required", "run" in (draw(state="running", updated_at=NOW)
 out = draw(state="running", label="te\nst", phase="comp\rling", updated_at=NOW)
 check("producer text cannot add a line", out is not None and "\n" not in out and "\r" not in out)
 
-with open(os.path.join(tmp, "run-%s.json" % sl.path_key(PROJ)), "w") as f:
+with open(os.path.join(tmp, produced("run", PROJ)), "w") as f:
     f.write("{not json")
 check("a half-written file draws nothing", sl.run_segment(PROJ) is None)
 
@@ -236,9 +268,9 @@ for name in bad:
 sys.exit(1 if bad else 0)
 PY
 then
-    echo "✓ the run cell draws what docs/producers.md says it draws"
+    echo "✓ the run cell draws, and all three per-tree files are named, as docs/producers.md says"
 else
-    echo "✗ the run cell does not behave as documented — the lines above name the rule"
+    echo "✗ a cell does not behave as documented — the lines above name the rule"
     FAIL=1
 fi
 rm -rf "$RUN_TMP"

@@ -338,7 +338,7 @@ same cell on top of that. **One run belongs to one tree**, so this one is keyed 
 ### The name is the whole tree
 
 `run-<path>.json`, where `<path>` is the project directory with **every `/` turned into `-`, and
-nothing else touched and nothing cut off**. That is `run_key()` in `statusline.py`, and it is
+nothing else touched and nothing cut off**. That is `path_key()` in `statusline.py`, and it is
 `ProjectStatus.key(forPath:)` in Clawdline. In a shell it is one `sed`:
 
 ```bash
@@ -350,25 +350,32 @@ and all. A space stays a space, because none of the three replaces it; `/` is th
 besides NUL that a name on this filesystem may not hold, so replacing it is the whole of what a
 path needs to become a filename.
 
-**This is deliberately not the rule `health-*.json` and `backlog-*.json` use.** Those two are
-`path_key()`: non-alphanumerics collapsed to `-`, and then the last 48 characters. Two reasons
-this file does not follow them, and neither is tidiness:
+**`health-*.json` and `backlog-*.json` are named by that same rule** — one function, one
+sentence, one `sed`. They were not until 2026-09-05: they were non-alphanumerics collapsed to
+`-` and then **the last 48 characters**, on the grounds that the status line was their only
+reader and could spell its own filenames however it liked. Two things were wrong with that, and
+neither is tidiness:
 
-- **`ghrun-`, `health-` and `backlog-` have one writer and one reader, both in this repository**
-  — the status line spawns the producer itself. Their names are nobody else's business.
-  `run-*.json` has **one producer and two readers**: `test.sh` writes one filename, and this
-  status line and Clawdline's footer must both find it. One reader being self-consistent is not
-  enough; a reader does not get an opinion about a name it did not choose.
 - **`[-48:]` loses information.** Any two project directories sharing their last 48 characters
-  land on one filename, and one project's test run drawn under another project's name is worse
-  than an empty cell. That is not a hypothetical shape: on the machine this was written on, 146
-  of the 178 projects in `~/.claude/project-icons.json` have keys past 48 characters, most of
-  them worktrees under one parent whose names differ near the *front* — precisely the end that
-  the truncation throws away.
+  land on one filename, and one project's test run — or backlog count — drawn under another
+  project's name is worse than an empty cell. That is not a hypothetical shape: on the machine
+  this was written on, 146 of the 178 projects in `~/.claude/project-icons.json` have keys past
+  48 characters, most of them worktrees under one parent whose names differ near the *front* —
+  precisely the end that the truncation threw away.
+- **`health-*.json` never did have one reader.** Clawdline reads it directly rather than probing
+  (below), so the truncation was a disagreement between two readers about one filename, in the
+  one file where nothing spawns a producer to paper over it. Nothing under `~/code/` was long
+  enough to hit it on the day it was removed, but
+  `~/code/clawdline-cloud/marketing/marketing-claude` measures 63 characters, and a project like
+  that one is a nested directory away.
 
-`./verify.sh` checks both halves of that rather than describing them: that a key longer than 48
-characters is not shortened and its file is still found, and that two paths differing only
-outside their last 48 characters do not collide. Both go red against the truncating rule.
+`ghrun-*.json` stays keyed by `<owner>-<repo>`, which is not this question: it is keyed by the
+remote on purpose, and that is the whole reason `run-*.json` exists beside it.
+
+`./verify.sh` checks both halves of the rule rather than describing them, and checks them for
+all three files: that a key longer than 48 characters is not shortened and its file is still
+found, and that two paths differing only outside their last 48 characters do not collide. They
+go red against the truncating rule.
 
 The path is the one Claude Code reports as the window's `project_dir` — the repository, not
 wherever the shell has been `cd`-ed to since. This is the same distinction `backlog_segment()`
@@ -584,10 +591,9 @@ has not changed. It also means that whenever the source file does change, `backl
 runs and writes its own answer over yours — so a producer that is not the one named in `PROBES`
 has to recount before the next redraw, or be replaced by a count of zero.
 
-The name is `backlog-<path>.json`, the project's directory with every character that is not a
-letter, digit, `-` or `_` turned into `-` and then **the last 48 characters of that** — a
-truncation Clawdline does not apply, so a project path longer than 48 characters is one of the
-few places where the two readers look for different files. `health-*.json` is keyed the same way.
+The name is `backlog-<path>.json`, the project's directory with every `/` turned into `-` and
+nothing else touched and nothing cut off — [the same key as `run-*.json`](#the-name-is-the-whole-tree),
+which is the one Clawdline computes too. `health-*.json` is keyed the same way.
 
 The cell draws only when `ok` is true and `total` is non-zero, and only `lanes.now` is coloured:
 `≡53 now2`. `ok: false` exists on purpose — "this repository has no backlog" and "it has one and

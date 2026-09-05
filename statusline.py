@@ -435,6 +435,19 @@ def fmt_elapsed(seconds):
     return "%ds" % s
 
 
+def path_key(path):
+    """The cache-file name for a per-path file — `backlog-`, `health-`, `run-`.
+
+    Every character that is not a letter, digit, `-` or `_` becomes `-`, and then **the last 48
+    of those**. The truncation is this reader's alone; Clawdline keys the same files by the whole
+    path, so a project directory longer than 48 characters is the one place the two readers open
+    different names. Kept in one function because that is a difference nobody would spot twice:
+    three cells keying the same directory very slightly differently look exactly like a project
+    that simply has no backlog, no health light and no run.
+    """
+    return "".join(c if c.isalnum() or c in "-_" else "-" for c in path)[-48:]
+
+
 def deploy_segment(cwd, repo, ahead=0):
     """Deploy and CI status: a spinner mid-run, plus one dot per job.
 
@@ -518,6 +531,141 @@ def deploy_segment(cwd, repo, ahead=0):
         if ahead == 0 and data.get("head_in_run") is False and data.get("sha"):
             return osc8(data.get("url"), paint("⚑ live " + data["sha"], fg((190, 160, 90))))
     return None
+
+
+# How long a `running` row goes on being drawn after the last thing the producer wrote, when the
+# file does not name its own ceiling, and how long a verdict is worth reading. Both are the
+# deploy cell's numbers (`LOCAL_RUNNING_TTL` is 1800 there, but that one is a poller's patience
+# with a *network* deploy; a local `./test.sh` that has said nothing for a quarter of an hour is
+# not running).
+RUN_STALE_AFTER = 900
+RUN_VERDICT_TTL = 900
+
+
+def _epoch(value):
+    """A number out of somebody else's JSON file, or 0 when there is not one to be had."""
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _run_text(value, limit=24):
+    """Producer text on its way to the line: verbatim, minus what would break the line.
+
+    `label` and `phase` are free text written by a shell script and drawn **in every language,
+    untranslated** — that is the whole reason this feature adds no new sentence anywhere. Two
+    things are still the reader's business and neither changes a meaning: a control character
+    would end the line early (this status line is exactly two lines, and a `\\n` inside a phase
+    name makes it three), and an essay pushes the health light off the right-hand edge, because
+    the line drops whole segments when it runs out of width.
+    """
+    if not isinstance(value, str):
+        return ""
+    return "".join(" " if ord(c) < 32 else c for c in value)[:limit].strip()
+
+
+def run_segment(proj):
+    """A local `./test.sh` or `./build.sh` running **in this tree**, from `run-<path>.json`.
+
+    The same shape as the deploy cell — a label, a bar from elapsed against typical, a verdict —
+    and three deliberate differences, each of which is why this is a seventh file rather than a
+    reuse of `ghrun-`:
+
+    - **Keyed by the project directory, not by the git remote.** `ghrun-` is
+      `ghrun-<owner>-<repo>.json`, so every worktree of one repository shares one slot — and
+      this machine routinely has several of them compiling at once. They would overwrite each
+      other's run, and a local run and a real CI run would fight over the same cell. One run
+      belongs to one tree.
+    - **It reads the file and does nothing else.** Every other cell here spawns a detached
+      process when its cache goes stale. There is nothing to spawn and nobody to ask: the run
+      *is* the producer, it writes at its own state changes, and there is no network and no
+      second writer to arbitrate with. So there is deliberately no `producer` field either —
+      `ghrun-` needs one only because it has a poller to lose a race to.
+    - **The ceiling on a stuck spinner lives here.** `ghrun-` gets one from
+      `local_deploy_holds()` in `gh-run-status.py`, which hands the file back to the poller
+      thirty minutes after the last local write. Nothing polls this file, so a run that was
+      `kill -9`'d, or a laptop that slept mid-compile, would spin in that bar for as long as the
+      window stayed open. A `running` row whose `updated_at` is older than its `stale_after`
+      (`RUN_STALE_AFTER` when the field is absent) draws nothing — and putting that in the
+      reader means every reader gets it, including the ones nobody has written yet.
+    """
+    path = os.path.join(CACHE_DIR, "run-%s.json" % path_key(proj))
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception:
+        return None
+    if not isinstance(data, dict):
+        return None
+
+    state = data.get("state")
+    if state not in ("running", "ok", "fail"):
+        # `none`, and every state this reader has not heard of. **Never a cross for a word it
+        # has not learned yet**: the vocabulary is expected to grow, and a red mark that is
+        # always wrong is indistinguishable from a broken light.
+        return None
+
+    # Every field is optional on the way in except `state`; one key that moved must not cost the
+    # whole row. `label` therefore has a fallback rather than being a requirement.
+    label = _run_text(data.get("label")) or "run"
+    log = data.get("log")
+    # Cmd-click opens the log this run is writing. `holder` and `tree` are for the person who
+    # `cat`s the file, the way `title` is in `ghrun-`; nothing draws them.
+    url = "file://" + log if isinstance(log, str) and log.startswith("/") else None
+    updated = _epoch(data.get("updated_at"))
+
+    if state == "running":
+        # `updated_at` is required, and **a missing one is stale rather than fresh**: `or 0`
+        # dates the file to 1970, which is the safe direction — a producer that forgot the field
+        # gets nothing on screen instead of a spinner nobody can retract. The age is measured
+        # from inside the file, never from its mtime: no poller touches this path, but a copy,
+        # a checkout or an editor would, and none of those is somebody writing a run.
+        if time.time() - updated > (_epoch(data.get("stale_after")) or RUN_STALE_AFTER):
+            return None
+
+        amber, dim_amber = (235, 190, 90), (170, 140, 80)
+        frame = SPINNER[int(time.time() * 8) % len(SPINNER)]
+        seg = paint(frame + " " + label, fg(amber))
+
+        started, typical = _epoch(data.get("started_at")), _epoch(data.get("typical_seconds"))
+        elapsed = max(0.0, time.time() - started) if started else None
+        over = False
+        if elapsed is not None and typical > 0:
+            # As in the deploy cell: redraws are slow, so the bar carries the progress and the
+            # spinner only says something is alive.
+            ratio = elapsed / typical
+            over = ratio > 1.0
+            fill = min(8, int(round(min(ratio, 1.0) * 8)))
+            seg += " " + paint("▰" * fill, fg((225, 130, 90) if over else amber))
+            seg += paint("▱" * (8 - fill), fg((90, 86, 80)))
+
+        # `phase` takes the readout's place when the producer sets one: "compiling" answers more
+        # at a glance than "2m00s/4m48s", the bar has already said how far along this is, and the
+        # bar's own colour still says when it has run over. Without a phase, the same
+        # elapsed-against-typical the deploy cell draws.
+        readout = _run_text(data.get("phase"))
+        if not readout and elapsed is not None:
+            readout = ("%s/%s" % (fmt_elapsed(elapsed), fmt_elapsed(typical))
+                       if typical > 0 else fmt_elapsed(elapsed))
+        if readout:
+            seg += paint(" " + readout, fg((225, 130, 90) if over else dim_amber))
+        return osc8(url, seg)
+
+    if state == "ok":
+        # A verdict is worth reading for a while and then it is history; a permanent tick is
+        # decoration nobody reads. The window is measured from `updated_at`, which this format
+        # requires, rather than from `started_at`, which the deploy cell uses — an `ok` with no
+        # `started_at` draws nothing there, and `producers.md` records that as one of the two
+        # rows that catch people out. There is no reason to inherit a trap.
+        if updated and time.time() - updated < RUN_VERDICT_TTL:
+            return osc8(url, paint("✓ " + label, fg((110, 200, 130))))
+        return None
+
+    # `fail`, and it does not expire. In the deploy cell the poller retires its own failures
+    # after six hours; nothing retires this one but the next run in this tree — and until then
+    # "the last thing that ran here failed" is simply true, about the tree you are standing in.
+    return osc8(url, paint("✗ " + label, "\x1b[31m"))
 
 
 def looks_like_sha(v):
@@ -613,8 +761,7 @@ def health_segment(entry, proj, cwd="", head=""):
     cfg = entry.get("health")
     if not isinstance(cfg, dict) or not cfg.get("url"):
         return None
-    key = "".join(c if c.isalnum() or c in "-_" else "-" for c in proj)[-48:]
-    path = os.path.join(CACHE_DIR, "health-%s.json" % key)
+    path = os.path.join(CACHE_DIR, "health-%s.json" % path_key(proj))
 
     data, age = None, 1e9
     try:
@@ -958,8 +1105,7 @@ def backlog_segment(proj):
     shown under Clawdline, which has no backlog at all). Taking one path removes the chance
     disagreeing rather than relying on the caller to pass matching ones.
     """
-    key = "".join(c if c.isalnum() or c in "-_" else "-" for c in proj)[-48:]
-    path = os.path.join(CACHE_DIR, "backlog-%s.json" % key)
+    path = os.path.join(CACHE_DIR, "backlog-%s.json" % path_key(proj))
 
     data, age = None, 1e9
     try:
@@ -1148,6 +1294,11 @@ def main():
     dep = deploy_segment(cwd, ws.get("repo"), git["ahead"])
     if dep:
         env_parts.append(dep)
+    # Beside the deploy cell, and after it: the same shape, and the local one is the one you
+    # started yourself a minute ago.
+    rn = run_segment(proj)
+    if rn:
+        env_parts.append(rn)
     bl = backlog_segment(proj)
     if bl:
         env_parts.append(bl)

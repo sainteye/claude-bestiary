@@ -537,20 +537,40 @@ def deploy_segment(cwd, repo, ahead=0):
 
 
 # How long a `running` row goes on being drawn after the last thing the producer wrote, when the
-# file does not name its own ceiling, and how long a verdict is worth reading. Both are the
-# deploy cell's numbers (`LOCAL_RUNNING_TTL` is 1800 there, but that one is a poller's patience
-# with a *network* deploy; a local `./test.sh` that has said nothing for a quarter of an hour is
-# not running).
+# file does not name its own ceiling. It is the deploy cell's number (`LOCAL_RUNNING_TTL` is 1800
+# there, but that one is a poller's patience with a *network* deploy; a local `./test.sh` that has
+# said nothing for a quarter of an hour is not running).
+#
+# There is no second number beside it for a verdict. `stale_after` asks whether a **running** row
+# is still alive, and a finished one is not alive and does not decay: "the last run of this tree
+# failed" — or passed — stays true until the next run overwrites the file, and every run rewrites
+# it. One expiry rule in this format, applied to the one state it is a question about.
+#
+# The deploy chip beside this one is not quite the precedent it looks like, and it is worth being
+# exact rather than borrowing the sentence: its `fail` has no expiry in the reader at all (that
+# half is the same), but its `ok` does stop after 900 seconds — because a poller is on its way
+# with GitHub's opinion of the branch, and the tick is holding a seat until that lands. Nothing
+# polls `run-*.json`. There is no later opinion to hold a seat for, so there is nothing for a
+# second number to do.
 RUN_STALE_AFTER = 900
-RUN_VERDICT_TTL = 900
 
 
-def _epoch(value):
-    """A number out of somebody else's JSON file, or 0 when there is not one to be had."""
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return 0.0
+def _num(value):
+    """A number out of somebody else's JSON file, or `None` when the file did not give one.
+
+    **Malformed is absent, everywhere**, and a string is malformed: `float("60")` is 60.0 in this
+    language, but `stale_after` is not a string in this format, and coercing one would be the
+    reader inventing a second spelling of the field and then obeying it. `True` is an `int` here
+    and is not a number in JSON; that accident stops at this line too.
+
+    What an absent value *means* is the caller's to say, and the two callers differ: `stale_after`
+    has a documented default to fall back on, `updated_at` has none and a `running` row without
+    one is malformed rather than merely thin. They agree on the question this answers — was there
+    a number there — and disagree only about what to do with the answer.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value)
 
 
 def _run_text(value, limit=24):
@@ -618,22 +638,41 @@ def run_segment(proj):
     # Cmd-click opens the log this run is writing. `holder` and `tree` are for the person who
     # `cat`s the file, the way `title` is in `ghrun-`; nothing draws them.
     url = "file://" + log if isinstance(log, str) and log.startswith("/") else None
-    updated = _epoch(data.get("updated_at"))
 
     if state == "running":
-        # `updated_at` is required, and **a missing one is stale rather than fresh**: `or 0`
-        # dates the file to 1970, which is the safe direction — a producer that forgot the field
-        # gets nothing on screen instead of a spinner nobody can retract. The age is measured
-        # from inside the file, never from its mtime: no poller touches this path, but a copy,
-        # a checkout or an editor would, and none of those is somebody writing a run.
-        if time.time() - updated > (_epoch(data.get("stale_after")) or RUN_STALE_AFTER):
+        # `updated_at` is required, and a `running` row without a usable one **draws nothing**.
+        # Not a fallback to `started_at`: that is defensible, and it makes "required" mean
+        # nothing — and a liveness ceiling a reader can trust is the whole reason this format
+        # exists beside `ghrun-` rather than reusing it. A missing field and an unparseable one
+        # are the same case, so a producer that forgot it, and one that wrote `"1788596894"` in
+        # quotes, both get nothing on screen instead of a spinner nobody can retract.
+        #
+        # The age is measured from inside the file, never from its mtime: no poller touches this
+        # path, but a copy, a checkout or an editor would, and none of those is somebody writing
+        # a run.
+        updated = _num(data.get("updated_at"))
+        if updated is None:
+            return None
+
+        # `stale_after` is the one field with a documented default, so an absent or malformed one
+        # falls back to it — and `0` does not. A producer that writes `0` meant something by it
+        # and gets it: expire now. Treating `0` as "unset" is `or`'s accident, not a decision
+        # anybody made about this format.
+        stale = _num(data.get("stale_after"))
+        if stale is None:
+            stale = RUN_STALE_AFTER
+        if time.time() - updated > stale:
             return None
 
         amber, dim_amber = (235, 190, 90), (170, 140, 80)
         frame = SPINNER[int(time.time() * 8) % len(SPINNER)]
         seg = paint(frame + " " + label, fg(amber))
 
-        started, typical = _epoch(data.get("started_at")), _epoch(data.get("typical_seconds"))
+        # Absent, malformed and zero all mean the same thing for these two — no bar, and for
+        # `typical_seconds` no division either — so they collapse together here rather than
+        # needing the distinction `stale_after` needs.
+        started = _num(data.get("started_at")) or 0.0
+        typical = _num(data.get("typical_seconds")) or 0.0
         elapsed = max(0.0, time.time() - started) if started else None
         over = False
         if elapsed is not None and typical > 0:
@@ -658,18 +697,22 @@ def run_segment(proj):
         return osc8(url, seg)
 
     if state == "ok":
-        # A verdict is worth reading for a while and then it is history; a permanent tick is
-        # decoration nobody reads. The window is measured from `updated_at`, which this format
-        # requires, rather than from `started_at`, which the deploy cell uses — an `ok` with no
-        # `started_at` draws nothing there, and `producers.md` records that as one of the two
-        # rows that catch people out. There is no reason to inherit a trap.
-        if updated and time.time() - updated < RUN_VERDICT_TTL:
-            return osc8(url, paint("✓ " + label, fg((110, 200, 130))))
-        return None
+        # **A verdict does not expire, and it is not measured against anything** — so it needs no
+        # `updated_at` either, however much this format requires one elsewhere. `stale_after` is
+        # about whether a *running* row is still alive; a finished verdict is not alive. "The
+        # last run of this tree passed" stays true until the next run overwrites the file, and
+        # the file is rewritten by every run, so a tick only persists while there has been
+        # nothing newer to say. This once had a 900-second window measured from `updated_at`, on
+        # the reasonable grounds that a permanent tick is decoration; it lost to one expiry rule
+        # in this format rather than two, and to there being nothing here for the second one to
+        # wait for — see the note beside `RUN_STALE_AFTER`. A tick you would rather not see all
+        # afternoon is a `"state": "none"` the producer can write in the same `mv`.
+        return osc8(url, paint("✓ " + label, fg((110, 200, 130))))
 
-    # `fail`, and it does not expire. In the deploy cell the poller retires its own failures
-    # after six hours; nothing retires this one but the next run in this tree — and until then
-    # "the last thing that ran here failed" is simply true, about the tree you are standing in.
+    # `fail`, on the same rule and for the same reason. In the deploy cell the poller retires its
+    # own failures after six hours; nothing retires this one but the next run in this tree — and
+    # until then "the last thing that ran here failed" is simply true, about the tree you are
+    # standing in.
     return osc8(url, paint("✗ " + label, "\x1b[31m"))
 
 

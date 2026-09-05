@@ -62,9 +62,10 @@ fi
 # ── the run cell's own rules ─────────────────────────────────────────────
 # One rule of the `run-*.json` format lives in the **reader** rather than in a poller: a
 # `running` row that nobody retracted has to stop being drawn (`RUN_STALE_AFTER` in
-# `run_segment()`, or `stale_after` in the file). There is no test suite in this repository, and
-# an untested rule in a file nobody opens at three in the morning is an unwritten one — so it
-# is checked here, against fixtures in a scratch directory. Never against the real cache.
+# `run_segment()`, or `stale_after` in the file) — and a finished verdict, which is not running,
+# is not subject to it. There is no test suite in this repository, and an untested rule in a file
+# nobody opens at three in the morning is an unwritten one — so it is checked here, against
+# fixtures in a scratch directory. Never against the real cache.
 #
 # This one reads the *repository's* statusline.py. The symlink checks above are what say $DEST
 # is the same file; this is a check of the code, not of the installation.
@@ -227,15 +228,51 @@ check("stale_after is the producer's to shorten",
       draw(state="running", label="test", updated_at=NOW - 100, stale_after=60) is None)
 check("stale_after is the producer's to lengthen",
       draw(state="running", label="test", updated_at=NOW - 100, stale_after=120) is not None)
-check("a running row with no updated_at is stale, not fresh",
+check("a running row with no updated_at draws nothing",
       draw(state="running", label="test", started_at=NOW) is None)
 
+# ── the six behaviours the first contract did not settle ──────────────────────────────────
+# `updated_at` was written as REQUIRED and, two lines later, as one of the fields that are all
+# optional but `state`. Two readers resolved that sensibly in opposite directions and each wrote
+# a guard around its own answer, so the disagreement ended up defended from both sides. The
+# settlement is three sentences: **`updated_at` is required, every other field is optional, and a
+# malformed value is an absent one.** These are the checks that hold each half of it down.
+#
+# `0` is not a missing field. A producer that writes it meant it, and "falsy therefore default"
+# is this language's accident rather than a decision anybody made about the format.
+check("stale_after 0 expires immediately, rather than meaning 900",
+      draw(state="running", label="test", updated_at=NOW - 60, stale_after=0) is None)
+check("a negative stale_after expires immediately too",
+      draw(state="running", label="test", updated_at=NOW, stale_after=-1) is None)
+# Malformed is absent — and what absent costs you differs only because one of the two fields has
+# a documented default to fall back on and the other has none.
+check("a string updated_at is not coerced; the row is malformed and draws nothing",
+      draw(state="running", label="test", updated_at=str(NOW)) is None)
+check("a true updated_at is not a number either",
+      draw(state="running", label="test", updated_at=True) is None)
+check("a string stale_after falls back to the 900 default rather than expiring at 60",
+      draw(state="running", label="test", updated_at=NOW - 100, stale_after="60") is not None)
+# A clock that went backwards leaves `updated_at` in the future. Draw, rather than hide: the file
+# is newer than this reader's idea of now, which is the opposite of stale.
+check("a file from the future is drawn, not hidden",
+      draw(state="running", label="test", updated_at=NOW + 3600) is not None)
+
 check("ok draws a tick", (draw(state="ok", label="test", updated_at=NOW) or "").find("✓") >= 0)
-check("an old tick expires", draw(state="ok", label="test", updated_at=NOW - 901) is None)
 check("fail draws a cross",
       (draw(state="fail", label="test", updated_at=NOW) or "").find("✗") >= 0)
+# **A verdict does not decay, and it is not measured against anything** — so `stale_after` does
+# not reach it and neither does the field `stale_after` would be measured from. `ok` had a
+# 900-second window here until 2026-09-05; it lost to one expiry rule in this format rather than
+# two. (The deploy cell does expire an `ok` after 900 seconds, and that is not the same case: it
+# is holding a seat until its poller arrives with GitHub's opinion. Nothing polls this file.)
+check("an old tick is still drawn", draw(state="ok", label="test", updated_at=NOW - 901)
+      is not None)
+check("a very old tick is still drawn",
+      draw(state="ok", label="test", updated_at=NOW - 90000) is not None)
+check("a tick with no updated_at is still drawn", draw(state="ok", label="test") is not None)
 check("fail does not expire",
       draw(state="fail", label="test", updated_at=NOW - 90000) is not None)
+check("a cross with no updated_at is still drawn", draw(state="fail", label="test") is not None)
 
 # `log` makes the whole cell Cmd-clickable. `holder` and `tree` are for the person who `cat`s the
 # file, the way `title` is in `ghrun-`, and must stay off a line that is already short of width.

@@ -325,7 +325,7 @@ started yourself, on this machine, thirty seconds ago.** `run_segment()` draws i
 ⠼ test ▰▰▰▱▱▱▱▱ compiling            a phase, drawn instead of the readout
 ⠴ test ▰▰▰▱▱▱▱▱ 2m00s/4m48s          no phase: elapsed against typical, as the deploy cell does
 ⠴ build ▰▰▰▰▰▰▰▰ 6m40s/4m48s         past typical: the bar and the readout go orange
-✓ test                               for RUN_VERDICT_TTL after `updated_at`, then nothing
+✓ test                               until the next run in this tree
 ✗ test                               until the next run in this tree
 ```
 
@@ -369,6 +369,14 @@ neither is tidiness:
   `~/code/clawdline-cloud/marketing/marketing-claude` measures 63 characters, and a project like
   that one is a nested directory away.
 
+There is a third reader of that rule and it is easy to miss: `tools/render-statusline.py`, which
+writes fixture files under a temporary HOME and screenshots what the line makes of them. It spelled
+the truncating rule for itself until 2026-09-05, and the way that failed is worth remembering —
+its files landed *beside* the ones the reader opened, so the backlog cell simply vanished from
+`docs/statusline.png` and the health cell went to amber `⚠ prod ?`, and the picture still looked
+like a picture. It calls `path_key()` now. **Anything that writes one of these files calls that
+function or runs that `sed`; nothing spells the rule a fourth time.**
+
 `ghrun-*.json` stays keyed by `<owner>-<repo>`, which is not this question: it is keyed by the
 remote on purpose, and that is the whole reason `run-*.json` exists beside it.
 
@@ -384,8 +392,19 @@ takes one argument to enforce, and for the same reason: a session opened in one 
 
 ### What is the same as `ghrun-`
 
-- **`state` is the only required field on the way in**, and every other key is optional. A
-  reader must not lose the whole row because one field moved; `label` falls back to `run`.
+- **`state` and `updated_at` are required on the way in; every other key is optional, and a
+  malformed value is an absent one.** That last sentence is the whole of the rule and it has no
+  per-field exceptions: a string where a number belongs, a `true`, a list — the reader treats
+  every one of them exactly as it treats the missing key, and never coerces. What an absent value
+  costs you differs only by whether the field has a documented default (`stale_after` does, and
+  falls back to it; `updated_at` does not, and a `running` row without one is malformed rather
+  than merely thin). Beyond those two, a reader must not lose the whole row because one field
+  moved: `label` falls back to `run`.
+
+  This page said `state` was the only required field and, forty lines down, that `updated_at` was
+  required too. Two implementations of this format read that and resolved it in opposite
+  directions, each writing a test around its own answer; the settlement above is what those two
+  lines should always have said.
 - **`none`, and every state the reader has not heard of, draw nothing.** Never a cross for a
   word it has not learned — the vocabulary is expected to grow, and a red mark that is always
   wrong is indistinguishable from a broken light.
@@ -420,17 +439,28 @@ a laptop that slept in the middle of a compile, would otherwise spin in that bar
 the window stayed open. So `run_segment()` refuses to draw it:
 
 ```python
-if time.time() - updated > (_epoch(data.get("stale_after")) or RUN_STALE_AFTER):
+updated = _num(data.get("updated_at"))
+if updated is None:
+    return None
+stale = _num(data.get("stale_after"))
+if stale is None:
+    stale = RUN_STALE_AFTER
+if time.time() - updated > stale:
     return None
 ```
 
 `RUN_STALE_AFTER` is 900 seconds, and it is what you get when the file has no `stale_after` of
-its own. Three consequences for a producer:
+its own. Four consequences for a producer:
 
-- **`updated_at` is required, in epoch seconds, and a missing one is stale rather than fresh.**
-  `_epoch()` returns 0 for an absent or unparseable value, which dates your file to 1970 — the
-  safe direction. A producer that forgot the field draws nothing at all, rather than a spinner
-  nobody can retract.
+- **`updated_at` is required, in epoch seconds, and a `running` row without a usable one draws
+  nothing at all.** Not a spinner nobody can retract, and not a fallback to `started_at` either:
+  falling back is defensible, and it makes "required" mean nothing — a liveness ceiling you can
+  trust is the whole reason this file exists rather than a seventh use of `ghrun-`. A producer
+  that forgot the field and one that wrote `"1788596894"` in quotes get the same empty cell.
+- **`stale_after: 0` expires the row immediately.** `0` is a value and you meant it by writing
+  it; only an absent or malformed `stale_after` falls back to the 900. (In this reader's language
+  `0` is falsy, so `x or 900` would quietly turn your zero into fifteen minutes. That is the
+  language's accident and not a decision about this format, and the reader no longer makes it.)
 - **A run that legitimately takes longer than fifteen minutes must say so**, either by writing
   its own larger `stale_after` or by rewriting the same `running` payload with a fresh
   `updated_at` before the ceiling. This is the one case where the "no heartbeat" rule above does
@@ -447,25 +477,38 @@ drawn (the test is *older than*, not *at least*), one second past it draws nothi
 | field | required | what `run_segment()` does with it |
 |---|---|---|
 | `state` | **yes** | `running`, `ok`, `fail`. Anything else, including `none`, draws nothing |
-| `updated_at` | **yes** | epoch seconds; the staleness ceiling and the tick's expiry are both measured from it |
+| `updated_at` | **yes** | epoch seconds; the staleness ceiling of a `running` row is measured from it. A verdict does not decay and is not measured against anything, so `ok` and `fail` draw without it |
 | `label` | no | drawn verbatim beside the spinner or the mark; `run` when absent |
 | `phase` | no | drawn verbatim **in place of the elapsed/typical readout** — "compiling" answers more at a glance than "2m00s/4m48s", and the bar has already said how far along this is |
 | `started_at` | no | epoch seconds; without it there is no bar and no elapsed time, only the label |
 | `typical_seconds` | no | what turns the spinner into `▰▰▰▱▱▱▱▱`. Without it you get a plain elapsed time |
-| `stale_after` | no | seconds; `RUN_STALE_AFTER` (900) when absent or zero |
+| `stale_after` | no | seconds, on a `running` row only; `RUN_STALE_AFTER` (900) when absent or not a number. `0` and a negative expire the row at once |
 | `log` | no | an absolute path, made Cmd-clickable as `file://` — the whole cell becomes the link |
 | `holder`, `tree` | no | **not drawn anywhere.** They are for the person who `cat`s the file, the way `title` is in `ghrun-`. Write them; do not expect to see them |
 
-Two rows of `state` are worth being exact about, since neither matches the deploy cell:
+One row of `state` is worth being exact about, because it is where this cell and the deploy cell
+part company:
 
-- **`ok` expires `RUN_VERDICT_TTL` (900 seconds) after `updated_at`** — not after `started_at`.
-  The deploy cell measures its tick from `started_at`, and "an `ok` without `started_at` draws
-  nothing" is one of the two rows that catch people out up the page. This format requires
-  `updated_at`, so there is always a timestamp and no reason to inherit the trap.
-- **`fail` does not expire.** The deploy cell's poller retires its own failures after six hours;
-  nothing retires this one but the next run in the same tree. Until then, "the last thing that
-  ran here failed" is simply true about the tree you are standing in, and the next `./test.sh`
-  overwrites it within a second of you doing something about it.
+- **A verdict does not expire — neither `ok` nor `fail`, however old, and neither needs
+  `updated_at` to be drawn.** `stale_after` asks whether a *running* row is still alive, and a
+  finished one is not alive: it does not decay, it is replaced. "The last run of this tree
+  passed" — or failed — stays true until the next run overwrites the file, and **every** run
+  rewrites it, so a verdict only survives while there has been nothing newer to say. The deploy
+  cell's poller retires its own failures after six hours because it is a poller with an opinion
+  about a branch; nothing polls this file. `ok` did have a 900-second window here until
+  2026-09-05, on the reasonable ground that a permanent tick is decoration nobody reads; it lost
+  to there being one expiry rule in this format rather than two, applied to the one state it is
+  a question about.
+
+  Be exact about the chip next door rather than borrowing its sentence, because half of it does
+  not carry: the deploy cell's `fail` has no expiry in the reader either, but **its `ok` does
+  stop after 900 seconds** — from `started_at`, up the page. That tick is holding a seat until
+  the poller arrives with GitHub's opinion of the branch, and `⚑ live` is what it hands the seat
+  to. Nothing polls `run-*.json`. There is no later opinion on its way, so there is nothing for
+  a second number to do.
+
+  (An `ok` you would rather not see all afternoon is a `"state": "none"` away. Writing one is a
+  sentence in the same `mv`, and it is the producer saying so rather than the reader guessing.)
 
 ### A run script that survives
 
@@ -643,7 +686,8 @@ print(repr(sl.run_segment("/Users/you/code/notebook")))     # writes /tmp/sl/run
 ```
 
 `./verify.sh` does exactly that, against its own scratch directory, for every rule stated above:
-the staleness boundary from both sides, a `running` row with no `updated_at`, an unknown state
-drawing nothing rather than a cross, a missing key not costing the whole row, and producer text
-that cannot add a third line. If you change what this reader draws, that is the file that says
+the staleness boundary from both sides, a `running` row with no `updated_at` and one whose
+`updated_at` is a string, `stale_after` at `0` and as a string, a verdict that is not expired by
+either of them, a clock that went backwards, an unknown state drawing nothing rather than a
+cross, a missing key not costing the whole row, and producer text that cannot add a third line. If you change what this reader draws, that is the file that says
 so.

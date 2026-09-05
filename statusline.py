@@ -436,16 +436,44 @@ def fmt_elapsed(seconds):
 
 
 def path_key(path):
-    """The cache-file name for a per-path file — `backlog-`, `health-`, `run-`.
+    """The cache-file name for `backlog-*.json` and `health-*.json`.
 
     Every character that is not a letter, digit, `-` or `_` becomes `-`, and then **the last 48
-    of those**. The truncation is this reader's alone; Clawdline keys the same files by the whole
-    path, so a project directory longer than 48 characters is the one place the two readers open
-    different names. Kept in one function because that is a difference nobody would spot twice:
-    three cells keying the same directory very slightly differently look exactly like a project
-    that simply has no backlog, no health light and no run.
+    of those**. Those two files are written and read by this repository alone — `backlog-status.py`
+    and `health-check.py` are both spawned from here — so their names are nobody else's business,
+    and this is what they have always been called. Do not "tidy" this into `run_key()` below: it
+    would rename a file for every project on this Mac, and 146 of the 178 in the registry on
+    2026-09-05 are long enough to be renamed.
+
+    It is lossy, and knowingly so: two project directories sharing their last 48 characters get
+    one filename. That is survivable for a backlog count and not survivable for a run, which is
+    why the newer format does not use it.
     """
     return "".join(c if c.isalnum() or c in "-_" else "-" for c in path)[-48:]
+
+
+def run_key(path):
+    """The cache-file name for `run-*.json`: the whole path, every `/` turned into `-`.
+
+    **Deliberately not `path_key()` above**, and the reason is not tidiness in either direction.
+    `backlog-` and `health-` have one writer and one reader, both in this repository. `run-` has
+    **one producer and two readers**: `test.sh` writes one filename, and this status line and
+    Clawdline's footer must both find it. Clawdline's `ProjectStatus.key(forPath:)` replaces the
+    slashes and nothing else, so that is the rule, and a reader does not get an opinion about a
+    name it did not choose.
+
+    Truncating it would not merely disagree with the other reader, it would lose information:
+    any two project paths sharing their last 48 characters collide on one filename, and one
+    project's test run drawn under another project's name is worse than an empty cell. On this
+    Mac 146 of 178 registered projects already have keys past 48 characters, most of them
+    worktrees under one parent whose names differ near the front.
+
+    Nothing else is replaced — a space stays a space — because the producer's one-liner is
+    `sed 's|/|-|g'` and the two have to agree character for character. `/` is also the only
+    character besides NUL that a name on this filesystem may not contain, so replacing it is
+    enough to make the result a filename.
+    """
+    return path.replace("/", "-")
 
 
 def deploy_segment(cwd, repo, ahead=0):
@@ -572,11 +600,13 @@ def run_segment(proj):
     and three deliberate differences, each of which is why this is a seventh file rather than a
     reuse of `ghrun-`:
 
-    - **Keyed by the project directory, not by the git remote.** `ghrun-` is
+    - **Keyed by the whole project directory, not by the git remote.** `ghrun-` is
       `ghrun-<owner>-<repo>.json`, so every worktree of one repository shares one slot — and
       this machine routinely has several of them compiling at once. They would overwrite each
       other's run, and a local run and a real CI run would fight over the same cell. One run
-      belongs to one tree.
+      belongs to one tree, so the name is `run_key()` above: the whole path, untruncated,
+      because the producer and the other reader spell it that way and because cutting it makes
+      two trees share a slot again for a different reason.
     - **It reads the file and does nothing else.** Every other cell here spawns a detached
       process when its cache goes stale. There is nothing to spawn and nobody to ask: the run
       *is* the producer, it writes at its own state changes, and there is no network and no
@@ -590,7 +620,7 @@ def run_segment(proj):
       (`RUN_STALE_AFTER` when the field is absent) draws nothing — and putting that in the
       reader means every reader gets it, including the ones nobody has written yet.
     """
-    path = os.path.join(CACHE_DIR, "run-%s.json" % path_key(proj))
+    path = os.path.join(CACHE_DIR, "run-%s.json" % run_key(proj))
     try:
         with open(path, encoding="utf-8") as f:
             data = json.load(f)

@@ -122,17 +122,57 @@ def check(name, ok):
         bad.append(name)
 
 
-def draw(**payload):
-    """Write one fixture and return what the cell draws for it."""
-    with open(os.path.join(tmp, "run-%s.json" % sl.path_key(PROJ)), "w") as f:
+def produced(proj):
+    """The filename `test.sh` writes, spelled out rather than asked for.
+
+    Every fixture below is named this way **on purpose**: a check that names the file by calling
+    the function it is checking agrees with the reader no matter what the reader decides, which
+    is exactly the failure this whole correction is about. `sed 's|/|-|g'` is the producer, and
+    this line is that `sed`.
+    """
+    return "run-%s.json" % proj.replace("/", "-")
+
+
+def draw(proj=None, **payload):
+    """Write one fixture the way a producer would, and return what the cell draws for it."""
+    proj = proj or PROJ
+    with open(os.path.join(tmp, produced(proj)), "w") as f:
         json.dump(payload, f)
-    return sl.run_segment(PROJ)
+    return sl.run_segment(proj)
 
 
-# The name is the project directory, every character that is not a letter, digit, `-` or `_`
-# replaced — the same key the backlog and health files already use.
-check("the key is the path", sl.path_key("/Users/x/code/clawdline") == "-Users-x-code-clawdline")
+# The name is the whole project directory with every `/` turned into `-`, and **nothing else**:
+# not the characters, and above all not the length. `run-` has one producer and two readers, and
+# the producer writes one filename, so the reader does not get to hold an opinion about it.
+check("the key is the path, `/` and nothing else",
+      sl.run_key("/Users/x/code/clawdline") == "-Users-x-code-clawdline")
+check("a space survives, because the producer's `sed` leaves it alone",
+      sl.run_key("/Users/x/Application Support/y") == "-Users-x-Application Support-y")
 check("no file draws nothing", sl.run_segment("/Users/nobody/code/absent") is None)
+
+# `[-48:]` is lossy, and both halves of that are checked here rather than described.
+LONG = "/Users/sainteye/Library/Application Support/Clawdline/worktrees/bestiary/" + "a" * 20
+check("a key longer than 48 characters is not shortened", len(sl.run_key(LONG)) > 48)
+check("a long path's file is still found",
+      draw(proj=LONG, state="running", label="test", updated_at=NOW) is not None)
+
+# Two trees under one parent, differing only in a name 48 characters from the end. `path_key()`
+# gives them one filename; one project's test run under another project's name is worse than
+# nothing on screen, which is the whole reason this cell does not use it.
+TAIL = "/worktrees/d710b7de-f565-41e4-a8b8-12177537893a/repo"      # 52 characters, so the part
+TWIN_A = "/Users/sainteye/code/alpha" + TAIL                        # that differs falls outside
+TWIN_B = "/Users/sainteye/code/bravo" + TAIL                        # the last 48 of either
+check("the twins collide under the truncating rule",
+      sl.path_key(TWIN_A) == sl.path_key(TWIN_B))
+check("the twins do not collide under this one", sl.run_key(TWIN_A) != sl.run_key(TWIN_B))
+check("one twin's run is not drawn under the other's name",
+      draw(proj=TWIN_A, state="running", label="test", updated_at=NOW) is not None
+      and sl.run_segment(TWIN_B) is None)
+
+# And `path_key()` itself is left exactly as it was. `health-` and `backlog-` are written and
+# read by this repository alone, so their names are nobody else's business — and renaming them
+# would rename a file for every project on this Mac.
+check("path_key still truncates, deliberately", len(sl.path_key(LONG)) == 48)
 
 running = dict(state="running", label="test", started_at=NOW - 120,
                typical_seconds=288, updated_at=NOW)

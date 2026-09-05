@@ -335,24 +335,40 @@ is one slot — and a machine that runs several worktrees of one repository at o
 overwriting each other's run, with the local run and the branch's real CI run fighting over the
 same cell on top of that. **One run belongs to one tree**, so this one is keyed by the tree.
 
-### The name is the tree
+### The name is the whole tree
 
-`run-<path>.json`, where `<path>` is the project directory with every character that is not a
-letter, digit, `-` or `_` replaced by `-`, and then the last 48 of those. That is `path_key()`
-in `statusline.py`, and it is the same key `health-*.json` and `backlog-*.json` already use — the
-48-character truncation included, which Clawdline does not apply.
-
-In a shell that is:
+`run-<path>.json`, where `<path>` is the project directory with **every `/` turned into `-`, and
+nothing else touched and nothing cut off**. That is `run_key()` in `statusline.py`, and it is
+`ProjectStatus.key(forPath:)` in Clawdline. In a shell it is one `sed`:
 
 ```bash
-KEY=$(printf '%s' "$PWD" | tr -c 'A-Za-z0-9_-' '-' | tail -c 48)
+KEY=$(printf '%s' "$PWD" | sed 's|/|-|g')
 ```
 
-Those two agree character for character on any path made of ASCII, which is what was checked.
-They **disagree on a path containing anything else**: `tr` works on bytes and Python's
-`str.isalnum()` knows about the rest of Unicode, so `~/code/專案` is `-Users-you-code-專案` to the
-reader and `-Users-you-code---` to that one-liner, and the two open different files. If your
-project paths are not ASCII, build the key the way the reader does rather than the way `tr` does.
+Those three agree character for character on **every** path — ASCII or not, long or short, spaces
+and all. A space stays a space, because none of the three replaces it; `/` is the only character
+besides NUL that a name on this filesystem may not hold, so replacing it is the whole of what a
+path needs to become a filename.
+
+**This is deliberately not the rule `health-*.json` and `backlog-*.json` use.** Those two are
+`path_key()`: non-alphanumerics collapsed to `-`, and then the last 48 characters. Two reasons
+this file does not follow them, and neither is tidiness:
+
+- **`ghrun-`, `health-` and `backlog-` have one writer and one reader, both in this repository**
+  — the status line spawns the producer itself. Their names are nobody else's business.
+  `run-*.json` has **one producer and two readers**: `test.sh` writes one filename, and this
+  status line and Clawdline's footer must both find it. One reader being self-consistent is not
+  enough; a reader does not get an opinion about a name it did not choose.
+- **`[-48:]` loses information.** Any two project directories sharing their last 48 characters
+  land on one filename, and one project's test run drawn under another project's name is worse
+  than an empty cell. That is not a hypothetical shape: on the machine this was written on, 146
+  of the 178 projects in `~/.claude/project-icons.json` have keys past 48 characters, most of
+  them worktrees under one parent whose names differ near the *front* — precisely the end that
+  the truncation throws away.
+
+`./verify.sh` checks both halves of that rather than describing them: that a key longer than 48
+characters is not shortened and its file is still found, and that two paths differing only
+outside their last 48 characters do not collide. Both go red against the truncating rule.
 
 The path is the one Claude Code reports as the window's `project_dir` — the repository, not
 wherever the shell has been `cd`-ed to since. This is the same distinction `backlog_segment()`
@@ -455,7 +471,7 @@ which is the point.
 set -euo pipefail
 
 CACHE=~/.claude/statusline-cache
-KEY=$(printf '%s' "$PWD" | tr -c 'A-Za-z0-9_-' '-' | tail -c 48)   # ASCII paths; see above
+KEY=$(printf '%s' "$PWD" | sed 's|/|-|g')   # the whole path; nothing else changes
 FILE="$CACHE/run-$KEY.json"
 LOG=/tmp/my-tests.log
 STARTED=$(date +%s)

@@ -107,6 +107,10 @@ seconds while the file says `running`, the replacement lands on the next redraw.
 exists here, and only when Claude Code reports a repository for the window — which is what makes
 your trap the one that has to be right.
 
+That asymmetry is the whole argument for the seventh file's one new rule: `run-*.json` has no
+poller at all, so its ceiling is in the reader instead, where every reader of the format gets it.
+The `run-*.json` section below is that rule.
+
 ## How quickly a write is noticed
 
 In `deploy_segment()`:
@@ -311,6 +315,183 @@ path — the cell is not drawn and your file is never opened, and no producer ca
 that. Which repository's name to use when a script in one place deploys another is answered on
 Clawdline's page, and the answer is the same here.
 
+## `run-*.json` — the local `./test.sh`, and the one rule that is not `ghrun-`'s
+
+Everything above is about a deploy. This is the other half of the same shape: **the run you
+started yourself, on this machine, thirty seconds ago.** `run_segment()` draws it exactly as
+`deploy_segment()` draws a deploy — a label, a bar from elapsed against typical, a verdict:
+
+```
+⠼ test ▰▰▰▱▱▱▱▱ compiling            a phase, drawn instead of the readout
+⠴ test ▰▰▰▱▱▱▱▱ 2m00s/4m48s          no phase: elapsed against typical, as the deploy cell does
+⠴ build ▰▰▰▰▰▰▰▰ 6m40s/4m48s         past typical: the bar and the readout go orange
+✓ test                               for RUN_VERDICT_TTL after `updated_at`, then nothing
+✗ test                               until the next run in this tree
+```
+
+It is a seventh file rather than a seventh use of `ghrun-`, and the reason is the file name.
+`ghrun-<owner>-<repo>.json` is keyed by **the git remote**, so every worktree of one repository
+is one slot — and a machine that runs several worktrees of one repository at once has them
+overwriting each other's run, with the local run and the branch's real CI run fighting over the
+same cell on top of that. **One run belongs to one tree**, so this one is keyed by the tree.
+
+### The name is the tree
+
+`run-<path>.json`, where `<path>` is the project directory with every character that is not a
+letter, digit, `-` or `_` replaced by `-`, and then the last 48 of those. That is `path_key()`
+in `statusline.py`, and it is the same key `health-*.json` and `backlog-*.json` already use — the
+48-character truncation included, which Clawdline does not apply.
+
+In a shell that is:
+
+```bash
+KEY=$(printf '%s' "$PWD" | tr -c 'A-Za-z0-9_-' '-' | tail -c 48)
+```
+
+Those two agree character for character on any path made of ASCII, which is what was checked.
+They **disagree on a path containing anything else**: `tr` works on bytes and Python's
+`str.isalnum()` knows about the rest of Unicode, so `~/code/專案` is `-Users-you-code-專案` to the
+reader and `-Users-you-code---` to that one-liner, and the two open different files. If your
+project paths are not ASCII, build the key the way the reader does rather than the way `tr` does.
+
+The path is the one Claude Code reports as the window's `project_dir` — the repository, not
+wherever the shell has been `cd`-ed to since. This is the same distinction `backlog_segment()`
+takes one argument to enforce, and for the same reason: a session opened in one tree that ran
+`./test.sh` in another would otherwise report the second tree's run under the first.
+
+### What is the same as `ghrun-`
+
+- **`state` is the only required field on the way in**, and every other key is optional. A
+  reader must not lose the whole row because one field moved; `label` falls back to `run`.
+- **`none`, and every state the reader has not heard of, draw nothing.** Never a cross for a
+  word it has not learned — the vocabulary is expected to grow, and a red mark that is always
+  wrong is indistinguishable from a broken light.
+- **Write to a temporary name and `mv` it into place**, so a reader that catches the moment sees
+  the old complete file or the new complete one and never half of each. Both readers parse the
+  file on every redraw.
+- **No heartbeat.** The bar is computed on every redraw from `started_at` and `typical_seconds`,
+  so a file written once keeps moving on screen without you. Write at phase boundaries and at
+  the end — but see the ceiling below, which is what a run longer than that costs you.
+- **`label` is drawn verbatim**, next to the spinner, untranslated in every language. So is
+  `phase`. Nothing in this feature adds a sentence anybody has to translate, which is the point
+  of both being producer text. Keep them short for the same reason as before: whole segments are
+  dropped when the line runs out of width, and `_run_text()` cuts both at 24 characters and
+  turns control characters into spaces — this status line is exactly two lines, and a `\n` in a
+  phase name would make it three.
+
+### The three things that differ
+
+**One: keyed by the working directory, not by the remote.** Above.
+
+**Two: there is no `producer` field, and you must not invent one.** `ghrun-` needs one because it
+has two writers racing — yours and `gh-run-status.py`, and the whole of that argument is
+`local_deploy_holds()`. This file has one writer and no poller. There is nothing to lose a race
+to, so there is nothing to declare.
+
+**Three: the ceiling on a stuck spinner lives in the reader.** This is the rule worth reading
+twice, because it is the one that does not exist anywhere else in this format. For `ghrun-`,
+what eventually clears a `running` file that nobody retracted is the poller: thirty minutes
+(`LOCAL_RUNNING_TTL`) after your last write, `local_deploy_holds()` stops holding and GitHub's
+opinion lands on the next redraw. **Nothing polls `run-*.json`.** A run that was `kill -9`'d, or
+a laptop that slept in the middle of a compile, would otherwise spin in that bar for as long as
+the window stayed open. So `run_segment()` refuses to draw it:
+
+```python
+if time.time() - updated > (_epoch(data.get("stale_after")) or RUN_STALE_AFTER):
+    return None
+```
+
+`RUN_STALE_AFTER` is 900 seconds, and it is what you get when the file has no `stale_after` of
+its own. Three consequences for a producer:
+
+- **`updated_at` is required, in epoch seconds, and a missing one is stale rather than fresh.**
+  `_epoch()` returns 0 for an absent or unparseable value, which dates your file to 1970 — the
+  safe direction. A producer that forgot the field draws nothing at all, rather than a spinner
+  nobody can retract.
+- **A run that legitimately takes longer than fifteen minutes must say so**, either by writing
+  its own larger `stale_after` or by rewriting the same `running` payload with a fresh
+  `updated_at` before the ceiling. This is the one case where the "no heartbeat" rule above does
+  not hold, and it is the same exception the deploy section makes at thirty minutes.
+- **The age comes from inside the file, never from its mtime.** Nothing touches this path
+  behind your back — there is no poller to stamp it — but a checkout, a copy or an editor
+  would, and none of those is somebody writing a run.
+
+The rule is checked from both sides by `./verify.sh`: at exactly `stale_after` the row is still
+drawn (the test is *older than*, not *at least*), one second past it draws nothing.
+
+### The fields, and which of them are drawn
+
+| field | required | what `run_segment()` does with it |
+|---|---|---|
+| `state` | **yes** | `running`, `ok`, `fail`. Anything else, including `none`, draws nothing |
+| `updated_at` | **yes** | epoch seconds; the staleness ceiling and the tick's expiry are both measured from it |
+| `label` | no | drawn verbatim beside the spinner or the mark; `run` when absent |
+| `phase` | no | drawn verbatim **in place of the elapsed/typical readout** — "compiling" answers more at a glance than "2m00s/4m48s", and the bar has already said how far along this is |
+| `started_at` | no | epoch seconds; without it there is no bar and no elapsed time, only the label |
+| `typical_seconds` | no | what turns the spinner into `▰▰▰▱▱▱▱▱`. Without it you get a plain elapsed time |
+| `stale_after` | no | seconds; `RUN_STALE_AFTER` (900) when absent or zero |
+| `log` | no | an absolute path, made Cmd-clickable as `file://` — the whole cell becomes the link |
+| `holder`, `tree` | no | **not drawn anywhere.** They are for the person who `cat`s the file, the way `title` is in `ghrun-`. Write them; do not expect to see them |
+
+Two rows of `state` are worth being exact about, since neither matches the deploy cell:
+
+- **`ok` expires `RUN_VERDICT_TTL` (900 seconds) after `updated_at`** — not after `started_at`.
+  The deploy cell measures its tick from `started_at`, and "an `ok` without `started_at` draws
+  nothing" is one of the two rows that catch people out up the page. This format requires
+  `updated_at`, so there is always a timestamp and no reason to inherit the trap.
+- **`fail` does not expire.** The deploy cell's poller retires its own failures after six hours;
+  nothing retires this one but the next run in the same tree. Until then, "the last thing that
+  ran here failed" is simply true about the tree you are standing in, and the next `./test.sh`
+  overwrites it within a second of you doing something about it.
+
+### A run script that survives
+
+Every path of this was run before it was pasted here: the happy one, a phase that fails, and a
+`TERM` in the middle. The last two both leave `{"state": "fail", "phase": "compiling"}` behind,
+which is the point.
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+
+CACHE=~/.claude/statusline-cache
+KEY=$(printf '%s' "$PWD" | tr -c 'A-Za-z0-9_-' '-' | tail -c 48)   # ASCII paths; see above
+FILE="$CACHE/run-$KEY.json"
+LOG=/tmp/my-tests.log
+STARTED=$(date +%s)
+PHASE=""
+
+say() {                                      # say running | ok | fail
+  mkdir -p "$CACHE"
+  cat > "$FILE.tmp$$" <<JSON
+{"state": "$1",
+ "label": "test",
+ "phase": "$PHASE",
+ "started_at": $STARTED,
+ "updated_at": $(date +%s),
+ "typical_seconds": 288,
+ "log": "$LOG",
+ "tree": "$PWD"}
+JSON
+  mv -f "$FILE.tmp$$" "$FILE"                # atomic: never half a file on screen
+}
+
+phase() { PHASE=$1; say running; }           # one write per phase boundary
+trap 'say fail; exit 1' ERR INT TERM         # a killed run must not spin for a quarter of an hour
+
+phase compiling ; swift build
+phase testing   ; swift test
+say ok
+```
+
+The `exit` in the trap is not decoration: without it a `TERM` handler returns into the script,
+which carries on and finishes by declaring success. That is the same measurement as in the
+deploy example, and it is still true here.
+
+There is no `producer` line in it, and that is deliberate — see above. There is no
+`head_in_run` either: this file has no such field, because a local run makes no claim about what
+is live.
+
 ## The other two files
 
 Both are also produced by scripts the status line spawns itself. **There is no cron entry to
@@ -430,3 +611,17 @@ print(repr(sl.deploy_segment(os.getcwd(), {"owner": "you", "name": "notebook"}, 
 `deploy_segment` takes the third argument from `git status` — the number of commits you have not
 pushed — so pass `0` to see what the `⚑ live` marker does and a positive number to watch it
 correctly stay quiet.
+
+The run cell takes the project directory and nothing else, and it opens no network and spawns
+nothing, so it is the easiest of the three to drive by hand:
+
+```python
+sl.CACHE_DIR = "/tmp/sl"
+print(repr(sl.run_segment("/Users/you/code/notebook")))     # writes /tmp/sl/run-<that path>.json
+```
+
+`./verify.sh` does exactly that, against its own scratch directory, for every rule stated above:
+the staleness boundary from both sides, a `running` row with no `updated_at`, an unknown state
+drawing nothing rather than a cross, a missing key not costing the whole row, and producer text
+that cannot add a third line. If you change what this reader draws, that is the file that says
+so.

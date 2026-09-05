@@ -16,6 +16,7 @@ drawn by hand starts lying the first time the thing it depicts changes.
 Chrome because there is no image library here and macOS will not screenshot a terminal without a
 recording permission — a browser is the one renderer already installed that can lay out text.
 """
+import importlib.util
 import json
 import os
 import re
@@ -27,6 +28,26 @@ import tempfile
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+
+
+def statusline():
+    """`statusline.py` as a module, for the one thing this tool must not spell for itself.
+
+    The per-tree cache files are named by `path_key()`, and that name is an interface — the
+    reader, Clawdline and a producer's `sed` all have to agree on it. This tool writes fixtures
+    *for* that reader, so a name it computes on its own is a fourth implementation of the rule,
+    and the way it fails is silent: the file lands beside the one the reader opens, the cell is
+    simply absent from the picture, and the picture still looks fine. It had exactly that bug
+    from 2026-09-05, when `path_key()` stopped truncating and this line did not.
+
+    Importing costs one exec of a module that reads no stdin and starts nothing; `verify.sh`
+    loads it the same way for the same reason.
+    """
+    spec = importlib.util.spec_from_file_location("sl", os.path.join(REPO, "statusline.py"))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
 
 # A terminal's 16 colours are only used for the few hard-coded ones (red for a failure, green for
 # ctx). Everything else arrives as a truecolour escape and needs no table.
@@ -85,7 +106,7 @@ def fake_home(tmp):
 
     import time as _t
     now = int(_t.time())
-    key = project.replace("/", "-")[-48:]
+    key = statusline().path_key(project)
     files = {
         "ghrun-you-my-api.json": {
             "state": "running", "label": "deploy", "started_at": now - 394,

@@ -89,6 +89,7 @@ spec = importlib.util.spec_from_file_location("sl", os.path.join(repo, "statusli
 sl = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(sl)
 sl.CACHE_DIR = tmp                       # not ~/.claude/statusline-cache. Never that.
+sl.NO_COLOR = False                      # whatever this terminal is; the link checks need it off
 
 
 class Frozen(object):
@@ -163,6 +164,16 @@ check("fail draws a cross",
       (draw(state="fail", label="test", updated_at=NOW) or "").find("✗") >= 0)
 check("fail does not expire",
       draw(state="fail", label="test", updated_at=NOW - 90000) is not None)
+
+# `log` makes the whole cell Cmd-clickable. `holder` and `tree` are for the person who `cat`s the
+# file, the way `title` is in `ghrun-`, and must stay off a line that is already short of width.
+out = draw(state="running", label="test", updated_at=NOW, log="/tmp/my-tests.log",
+           holder="clawdline-8d", tree="/Users/nobody/code/run-cell-check")
+check("log becomes a link", out is not None and "file:///tmp/my-tests.log" in out)
+check("holder and tree are not drawn",
+      out is not None and "clawdline-8d" not in out and "code-run-cell-check" not in out)
+check("a relative log path is not a link",
+      "file://" not in (draw(state="running", label="test", updated_at=NOW, log="x.log") or ""))
 
 # Never a cross for a word this reader has not heard of, and never a crash for a missing key.
 check("none draws nothing", draw(state="none", why="no-run", updated_at=NOW) is None)

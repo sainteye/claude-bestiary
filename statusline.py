@@ -925,6 +925,53 @@ def share_segment(proj):
     return "project %s%%" % (("%.1f" % share).rstrip("0").rstrip("."))
 
 
+def newer_window(held, incoming, now):
+    """The truer of two readings of one plan window, or None when neither is still live.
+
+    **A session's `rate_limits` is as old as that session's last reply, not as old as the render.**
+    An idle terminal keeps re-rendering its status line with the numbers its last API response
+    carried, days ago; the 2026-09-15 file flipped between 25%, 45%, 64% and 65% for one 7d window
+    inside two minutes, five sessions taking turns. What orders two readings is the window itself:
+    a later `resets_at` is a later window, and within one `resets_at` usage only rises, so the
+    higher percentage is the newer reading. A window whose reset has passed says nothing now.
+    """
+    def reset_of(window):
+        value = window.get("resets_at") if isinstance(window, dict) else None
+        return value if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+
+    def used_of(window):
+        value = window.get("used_percentage")
+        return value if isinstance(value, (int, float)) and not isinstance(value, bool) else -1
+
+    held_reset, incoming_reset = reset_of(held), reset_of(incoming)
+    held_live = held_reset is not None and held_reset > now
+    if incoming_reset is None:
+        # Nothing to order it by. A live, comparable reading outranks it; otherwise take it.
+        return held if held_live else incoming
+    if incoming_reset <= now:
+        return held if held_live else None
+    if not held_live or incoming_reset > held_reset:
+        return incoming
+    if incoming_reset < held_reset:
+        return held
+    return incoming if used_of(incoming) >= used_of(held) else held
+
+
+def merge_limits(held, incoming, now):
+    """Every window, each as `newer_window` settles it — including one only the file still has,
+    because an idle session's stdin has already dropped the 5h window its reply predates."""
+    held = held if isinstance(held, dict) else {}
+    out = {}
+    for key in sorted(set(held) | set(incoming)):
+        if key in incoming and not isinstance(incoming[key], dict):
+            out[key] = incoming[key]    # not window-shaped: nothing to order, pass it through
+            continue
+        window = newer_window(held.get(key), incoming.get(key), now)
+        if window is not None:
+            out[key] = window
+    return out
+
+
 def save_limits(limits, session_id):
     """Write the plan's windows down, for whoever is not looking at this terminal.
 
@@ -932,19 +979,23 @@ def save_limits(limits, session_id):
     transcript, not a file — so the 5h and 7d percentages exist for as long as this process does.
     Clawdline's Session info card wants the same two numbers on a phone, and reads this file.
     The windows are the account's, not the session's, so there is one file; `session_id` says
-    which render wrote it last. Skipped when nothing changed: a render every two seconds that
-    rewrote an identical file would be churn for its own sake.
+    which render wrote it last. A reading is merged in, not written over — see `newer_window` for
+    why the last render is not the newest reading. Skipped when nothing changed: a render every
+    two seconds that rewrote an identical file would be churn for its own sake.
     """
     if not isinstance(limits, dict) or not limits:
         return
     path = os.path.join(CACHE_DIR, "rate-limits.json")
     try:
+        held = None
         try:
             with open(path, encoding="utf-8") as f:
-                if (json.load(f) or {}).get("rate_limits") == limits:
-                    return
+                held = (json.load(f) or {}).get("rate_limits")
         except (OSError, ValueError):
             pass
+        limits = merge_limits(held, limits, time.time())
+        if not limits or held == limits:
+            return
         os.makedirs(CACHE_DIR, exist_ok=True)
         tmp = path + ".tmp.%d" % os.getpid()
         with open(tmp, "w", encoding="utf-8") as f:

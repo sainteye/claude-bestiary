@@ -27,6 +27,7 @@ import sys
 import time
 
 TIMEOUT = 20
+REMOTE_CHECK_TIMEOUT = 8
 
 
 def gh_bin():
@@ -44,6 +45,66 @@ def run(args, cwd, timeout=TIMEOUT):
         return r.stdout if r.returncode == 0 else None
     except Exception:
         return None
+
+
+def resolve_branch(repo):
+    """Return (remote branch, remote, source), using local git data only.
+
+    An upstream is the exact mapping the current branch is configured to push to. Without one,
+    a cached remote HEAD is a better account of the repository's CI branch than the arbitrary
+    local name. The local name is still useful as the last fallback for feature branches.
+    """
+    local = (run(["git", "branch", "--show-current"], repo, 3) or "").strip()
+    if not local:
+        return None, None, None
+
+    remotes = (run(["git", "remote"], repo, 3) or "").splitlines()
+    remotes = [remote.strip() for remote in remotes if remote.strip()]
+    if not remotes:
+        return local, None, "local"
+
+    upstream = (run(["git", "rev-parse", "--abbrev-ref", "--symbolic-full-name",
+                     "@{upstream}"], repo, 3) or "").strip()
+    for remote in sorted(remotes, key=len, reverse=True):
+        prefix = remote + "/"
+        if upstream.startswith(prefix):
+            return upstream[len(prefix):], remote, "upstream"
+
+    configured = (run(["git", "config", "--get", "branch.%s.remote" % local], repo, 3)
+                  or "").strip()
+    if configured not in remotes:
+        configured = (run(["git", "config", "--get", "remote.pushDefault"], repo, 3)
+                      or "").strip()
+    if configured not in remotes:
+        configured = "origin" if "origin" in remotes else sorted(remotes)[0]
+
+    head = (run(["git", "symbolic-ref", "--quiet", "--short",
+                 "refs/remotes/%s/HEAD" % configured], repo, 3) or "").strip()
+    prefix = configured + "/"
+    if head.startswith(prefix) and len(head) > len(prefix):
+        return head[len(prefix):], configured, "remote-default"
+    return local, configured, "local"
+
+
+def remote_has_branch(repo, remote, branch):
+    """True/False when the remote answers; None when it cannot be reached.
+
+    This deliberately runs only after GitHub returned an empty run list. Checking every refresh
+    would make the common path slower; not checking at all would turn "wrong branch" into
+    "no runs" again.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "ls-remote", "--exit-code", "--heads", remote,
+             "refs/heads/%s" % branch],
+            cwd=repo, capture_output=True, text=True, timeout=REMOTE_CHECK_TIMEOUT)
+    except Exception:
+        return None
+    if result.returncode == 0:
+        return True
+    if result.returncode == 2:
+        return False
+    return None
 
 
 STATE_OF = {"success": "ok", "failure": "fail", "timed_out": "fail",
@@ -105,14 +166,17 @@ def main():
     repo, out = sys.argv[1], sys.argv[2]
     if local_deploy_holds(out):
         return
-    gh = gh_bin()
-    if not gh:
-        write(out, {"state": "none", "why": "no-gh"})
-        return
-
-    branch = (run(["git", "branch", "--show-current"], repo, 3) or "").strip()
+    branch, remote, branch_source = resolve_branch(repo)
     if not branch:
         write(out, {"state": "none", "why": "no-branch"})
+        return
+    if not remote:
+        write(out, {"state": "none", "why": "remote-unavailable", "detail": "no-remote"})
+        return
+
+    gh = gh_bin()
+    if not gh:
+        write(out, {"state": "none", "why": "remote-unavailable", "detail": "no-gh"})
         return
 
     # Fetch several recent runs at once, to work out how long this workflow usually takes —
@@ -122,15 +186,25 @@ def main():
     raw = run([gh, "run", "list", "--branch", branch, "--limit", "15",
                "--json", "databaseId,status,conclusion,headSha,displayTitle,"
                          "createdAt,startedAt,updatedAt,url,workflowName"], repo)
-    if not raw:
-        write(out, {"state": "none", "why": "gh-failed"})
+    if raw is None:
+        write(out, {"state": "none", "why": "remote-unavailable", "detail": "gh-failed"})
         return
     try:
         runs = json.loads(raw)
     except Exception:
-        runs = []
+        write(out, {"state": "none", "why": "remote-unavailable",
+                    "detail": "invalid-gh-response"})
+        return
     if not runs:
-        write(out, {"state": "none", "why": "no-runs"})
+        exists = remote_has_branch(repo, remote, branch)
+        detail = {"branch": branch, "branch_source": branch_source, "remote": remote}
+        if exists is False:
+            write(out, dict(detail, state="none", why="branch-missing"))
+        elif exists is True:
+            write(out, dict(detail, state="none", why="no-runs"))
+        else:
+            write(out, dict(detail, state="none", why="remote-unavailable",
+                            detail="branch-check-failed"))
         return
 
     r = runs[0]

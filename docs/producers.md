@@ -36,8 +36,9 @@ return age < (LOCAL_RUNNING_TTL if cur.get("state") == "running" else LOCAL_DONE
 ```
 
 It runs as the first thing in `main()`. When it holds, the poller exits without writing a byte;
-when it does not, the poller writes whatever GitHub says — and on a repository with no runs on
-this branch that is `{"state": "none", "why": "no-runs"}`, which **draws nothing at all**. A
+when it does not, the poller writes whatever GitHub says — and on a repository whose selected
+remote branch exists but has no runs that is `{"state": "none", "why": "no-runs"}`, which
+**draws nothing at all**. A
 `running` file that vanishes into an empty cell, a few seconds after a deploy started, is that
 line and nothing more exotic.
 
@@ -131,6 +132,38 @@ That cadence is also the answer to "why did it disappear so fast". Omitting `pro
 lose a race by a hair — the poller is invited to overwrite your file **every five seconds for as
 long as it says `running`**, which is the one state in which you were most sure you had got it
 right.
+
+## Which branch the poller asks for
+
+The branch shown in the terminal and the branch pushed to GitHub need not have the same name.
+`gh-run-status.py` therefore resolves the query from local git data, in this order:
+
+1. The current branch's upstream, from `git rev-parse --abbrev-ref @{upstream}`. This is the
+   strongest answer because it records the configured mapping itself: local `master` can track
+   `origin/main` without either name being guessed.
+2. The selected remote's cached `refs/remotes/<remote>/HEAD`. This is the repository's default
+   branch without a network call, and is the useful answer for a new local branch with no
+   upstream yet.
+3. The current local branch name. Feature branches normally have the same name at both ends, so
+   this remains the last fallback.
+
+The remote is the upstream's remote when there is one; otherwise the branch's configured remote,
+`remote.pushDefault`, `origin`, or the first named remote in that order. A repository with no
+remote is not treated as a repository with no runs.
+
+The common path still makes one network call: `gh run list`. Only when that succeeds and returns
+an empty list does the poller run a bounded `git ls-remote --heads` check. That second question is
+what separates these three facts:
+
+| `why` | meaning |
+|---|---|
+| `branch-missing` | the selected remote answered, and that branch does not exist there |
+| `no-runs` | the selected branch exists remotely, but has no workflow run |
+| `remote-unavailable` | the remote could not be queried: no remote, no `gh`, failed `gh` authentication/network, or a failed branch check |
+
+`remote-unavailable` also carries a short `detail` (`no-remote`, `no-gh`, `gh-failed`,
+`invalid-gh-response`, or `branch-check-failed`) for a person inspecting the cache. As with every
+`none` row, none of these diagnostic fields is drawn on the status line.
 
 ## The fields this reader draws that the other page does not
 
@@ -235,9 +268,10 @@ optional. (A permanent tick is decoration nobody reads, which is why it expires 
 
 **`none` is not an error, and it is the state you will emit most.** It means there is nothing
 worth showing, and it carries a `why` for the person reading the file rather than for the line:
-`no-gh`, `no-branch`, `gh-failed`, `no-runs`, `workflow-disabled`, `stale-fail`. Write `none`
-with a `why` rather than deleting the file or writing an empty one — that is what keeps "nothing
-to say" and "the producer is broken" distinguishable on disk at three in the morning.
+`no-branch`, `branch-missing`, `no-runs`, `remote-unavailable`, `workflow-disabled`,
+`stale-fail`. Write `none` with a `why` rather than deleting the file or writing an empty one —
+that is what keeps "nothing to say" and "the producer is broken" distinguishable on disk at
+three in the morning.
 
 And the rule for **a state you do not recognise**, in either direction: draw nothing.
 `deploy_segment()` ends in a bare `return None` for precisely this reason. A reader that treats
@@ -659,8 +693,9 @@ diff /tmp/before.json /tmp/sl/ghrun-you-notebook.json && echo "it held"
 ```
 
 Delete `"producer": "local"` from the file and run that again: it will come back as GitHub's view
-of the branch, or as `{"state": "none", "why": "no-runs"}`. That is the five-second disappearance,
-reproduced in one command.
+of the branch, or as one of the diagnostic `none` rows above. That is the five-second
+disappearance, reproduced in one command without pretending that every empty result means
+`no-runs`.
 
 To see what a file actually draws, without waiting for a deploy and without touching
 `~/.claude/statusline-cache`:
@@ -691,3 +726,14 @@ the staleness boundary from both sides, a `running` row with no `updated_at` and
 either of them, a clock that went backwards, an unknown state drawing nothing rather than a
 cross, a missing key not costing the whole row, and producer text that cannot add a third line. If you change what this reader draws, that is the file that says
 so.
+
+The poller's branch and remote rules have their own real-git check:
+
+```bash
+python3 docs/verify-gh-run-status.py
+```
+
+It creates temporary repositories and bare remotes, never the live status-line cache. Its fake
+`gh` makes the old local-name bug reproducible while real git exercises the upstream mapping,
+cached remote default, local fallback, missing remote branch, existing branch with no runs, and
+the unavailable-remote paths.

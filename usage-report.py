@@ -14,24 +14,13 @@ assistant reply carries `message.usage` (input / output / cache read / cache wri
 
 ## Why tokens and not money
 
-The transcripts hold quantities and no unit price. On 2026-08-12, working backwards from the
-official `total_cost_usd` of eight running sessions to a unit price for one model
-(`claude-opus-5`) gave $0.45 to $25.25 per MTok — **a factor of 55**. At least three reasons it
-cannot be recovered:
+The transcripts hold quantities, not enough information to reconstruct billing. Session cost
+counters can reset after compaction, pricing can depend on context length, and server-side tools
+can be billed separately from tokens. This report therefore sums usage without inferring a unit
+price or printing a billing total.
 
-  1. `total_cost_usd` **is reset to zero by `/compact`** — one session read $32.61 before and
-     $5.07 after, with both halves still in the transcript.
-  2. Requests over 200k of context are priced separately (the status line payload's
-     `exceeds_200k_tokens` is exactly this), and the transcript does not record which band a
-     given request landed in.
-  3. Server-side tools like web search and web fetch are billed separately and are not tokens.
-
-So this **deliberately prints no money**. A made-up unit price produces a number that looks
-precise and can be wrong by a factor of 55, which is worse than no number — without one you go
-and look it up, with one you do not.
-
-For what was actually spent: the `$` at the bottom right of the status line is the official
-figure (one session, reset by compaction), and the account-level figure is at
+The `$` at the bottom right of the status line is Claude Code's session cost counter, not an
+account billing total. For account usage, consult
 <https://claude.ai/new#settings/usage>.
 
 ## What the columns mean
@@ -183,17 +172,16 @@ def human(n):
 def tokens_of(a):
     """Total tokens for one bucket.
 
-    **Which denominator hardly changes the answer**: one project's share of a month measured
-    44.7% by output, 45.1% by total tokens and 43.9% by request count — under 1.5 percentage points
-    apart. So take the least arbitrary one, every token added up, and do not argue about it.
+    Sum input, output, cache reads and cache writes to use one consistent metric for every
+    project's share of total usage.
     """
     return a["out"] + a["inp"] + a["cache_read"] + a["cache_write"]
 
 
 def write_cache(path, month, by_project, total):
-    """The small file the status line reads. **The status line never scans transcripts** — 215
-    of them take 3.5 seconds, and one redraw has a budget of 55ms. The same arrangement as
-    deploy and health: read a cache, spawn a background process when it is stale.
+    """The small file the status line reads. **The status line never scans transcripts**:
+    scanning a growing conversation history on every redraw would delay rendering. The same
+    arrangement as deploy and health: read a cache, spawn a background process when it is stale.
     """
     tot = tokens_of(total) or 1
     payload = {

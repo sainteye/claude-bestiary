@@ -3,10 +3,10 @@
 """A Claude Code status line: one generated pixel creature per project, and what this window is
 doing.
 
-Two lines (Claude Code's statusLine supports more than one):
+Two lines, shown with synthetic example values (Claude Code's statusLine supports more than one):
 
     ▟█▙  my-api      ~/code/my-api  ⎇ main            Opus 5 (1M) · xhigh
-    █▀█  add rate limiting to the upload handler       ctx 77% · $7.91 · 5h 24%
+    █▀█  add rate limiting to the upload handler       ctx 25% · $1.00 · 5h 50%
 
 The four rows of pixels on the left are squeezed into two lines of text with half blocks
 (▀ / ▄): the top half painted in the foreground colour, the bottom half in the background, so
@@ -236,9 +236,8 @@ def save_registry(projects, options):
     **Resolve the symlink first.** `os.replace` replaces the path, not the file the path points
     at — so doing it to REGISTRY directly turns `~/.claude/project-icons.json` from a symlink
     into a real file, after which the version in the repository is no longer the one running.
-    It happened for real on 2026-08-11, triggered by auto-registering a new project, and
-    `verify.sh` is what caught it. The same illness as a bind-mounted config whose inode a
-    deploy replaces.
+    `verify.sh` checks that installed links remain intact. The same issue applies to a
+    bind-mounted config whose inode a deploy replaces.
     """
     payload = {"_readme": README, "options": options, "projects": projects}
     try:
@@ -500,9 +499,8 @@ def deploy_segment(cwd, repo, ahead=0):
         if started:
             elapsed = max(0, time.time() - started)
             if typical:
-                # The bar is based on how long this workflow usually takes. Redraws are slow
-                # (0.5 a second on average, measured), so the bar is what carries the progress
-                # — not the spinner.
+                # The bar is based on how long this workflow usually takes. Redraws can be
+                # infrequent, so the bar is what carries the progress — not the spinner.
                 ratio = elapsed / float(typical)
                 over = ratio > 1.0
                 fill = min(8, int(round(min(ratio, 1.0) * 8)))
@@ -597,8 +595,8 @@ def run_segment(proj):
 
     - **Keyed by the whole project directory, not by the git remote.** `ghrun-` is
       `ghrun-<owner>-<repo>.json`, so every worktree of one repository shares one slot — and
-      this machine routinely has several of them compiling at once. They would overwrite each
-      other's run, and a local run and a real CI run would fight over the same cell. One run
+      concurrent worktrees would overwrite each other's run, and a local run and a real CI run
+      would fight over the same cell. One run
       belongs to one tree, so the name is `path_key()` above: the whole path, untruncated,
       because the producer and the other reader spell it that way and because cutting it makes
       two trees share a slot again for a different reason.
@@ -881,13 +879,12 @@ def share_segment(proj):
     It answers "which of these projects is eating my quota". The `7d 95%` next to it says how
     much is left; this says **who spent it**, and you need both to decide anything.
 
-    **The status line never scans transcripts**: 215 of them take 3.5 seconds, and a redraw has
-    a budget of 55ms. The same arrangement as deploy and health — read a cache, spawn a detached
-    process when it is stale.
+    **The status line never scans transcripts**: scanning a growing conversation history on
+    every redraw would delay rendering. The same arrangement as deploy and health — read a cache,
+    spawn a detached process when it is stale.
 
     The denominator is every project's total tokens (input, output, cache reads and writes).
-    Output or request count as the denominator gives nearly the same answer (45.1% / 44.7% /
-    43.9% for one project in 2026-08), so it is not worth arguing about.
+    This provides one consistent metric for every project's share of total usage.
     """
     path = os.path.join(CACHE_DIR, "usage-month.json")
     data, age = None, 1e9
@@ -930,8 +927,8 @@ def newer_window(held, incoming, now):
 
     **A session's `rate_limits` is as old as that session's last reply, not as old as the render.**
     An idle terminal keeps re-rendering its status line with the numbers its last API response
-    carried, days ago; the 2026-09-15 file flipped between 25%, 45%, 64% and 65% for one 7d window
-    inside two minutes, five sessions taking turns. What orders two readings is the window itself:
+    carried, which can be days old. Multiple sessions can therefore alternate between stale and
+    current values on each render. What orders two readings is the window itself:
     a later `resets_at` is a later window, and within one `resets_at` usage only rises, so the
     higher percentage is the newer reading. A window whose reset has passed says nothing now.
     """
@@ -1161,8 +1158,7 @@ def _backlog_stale(data):
     **A missing `source` is a timer, not an immediate recount.** It used to return True outright,
     and the payload written for a repository with no backlog at all has no `source` — so the very
     file whose comment says "the status line stops calling this" was the thing that guaranteed it
-    kept calling. Measured 2026-08-19 on a repository without a probe: a fresh subprocess roughly
-    every five seconds, per window, indefinitely. The same branch covers a genuinely old-format
+    kept calling on every refresh. The same branch covers a genuinely old-format
     cache, which now upgrades within the window instead of on the next render.
     """
     if not data:
@@ -1200,9 +1196,8 @@ def backlog_segment(proj):
     describing, `current_dir` is wherever the shell has been `cd`-ed to since. A session opened
     in one repository that ran commands in another therefore wrote the second repository's
     backlog into the first one's cache file, and the status line then reported it as the first
-    one's for as long as that file stayed fresh (seen 2026-08-18: another repository's 46 items
-    shown under Clawdline, which has no backlog at all). Taking one path removes the chance
-    disagreeing rather than relying on the caller to pass matching ones.
+    one's for as long as that file stayed fresh. Taking one path removes the chance of
+    disagreement rather than relying on the caller to pass matching ones.
     """
     path = os.path.join(CACHE_DIR, "backlog-%s.json" % path_key(proj))
 
@@ -1216,9 +1211,8 @@ def backlog_segment(proj):
 
     # **The test is the source file's mtime, not elapsed time.** The first version copied the
     # deploy cell's ten-minute TTL, but that cell talks to the network and has to be throttled;
-    # this one reads one local YAML and has no reason to poll — the cost was a change you had
-    # just saved taking up to ten minutes to appear (measured 2026-08-16: thirteen items out of
-    # date on screen). Now: recount when the source is newer, and never otherwise.
+    # this one reads one local YAML and has no reason to poll. A TTL delays saved changes;
+    # recount when the source is newer instead.
     #
     # `age > 5` prevents re-entry: from the moment the condition holds until the recount
     # finishes, every redraw would hit it — and the cache's timestamp is stamped first (below),
@@ -1277,7 +1271,7 @@ def clip(s, limit):
     """Truncate by display width, **stepping over ANSI codes**.
 
     Cutting inside an escape sequence makes the terminal print the remaining bytes as text —
-    which is how a narrow window ends up showing `[38;2;...` (observed 2026-08-11).
+    which is how a narrow window ends up showing `[38;2;...`.
     """
     if limit <= 1 or dwidth(s) <= limit:
         return s

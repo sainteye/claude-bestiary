@@ -181,8 +181,8 @@ def main():
 
     # Fetch several recent runs at once, to work out how long this workflow usually takes —
     # which is what the progress bar is made of. The bar matters more than the spinner: the
-    # status line redraws 0.5 times a second on average (measured), so a spinner never turns
-    # smoothly, while "2m14s of a usual 6m" reads correctly however slow the redraws are.
+    # status line redraws can be infrequent, so a spinner may not turn smoothly, while
+    # "2m14s of a usual 6m" reads correctly however slow the redraws are.
     raw = run([gh, "run", "list", "--branch", branch, "--limit", "15",
                "--json", "databaseId,status,conclusion,headSha,displayTitle,"
                          "createdAt,startedAt,updatedAt,url,workflowName"], repo)

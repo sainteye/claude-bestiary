@@ -392,16 +392,13 @@ neither is tidiness:
 
 - **`[-48:]` loses information.** Any two project directories sharing their last 48 characters
   land on one filename, and one project's test run — or backlog count — drawn under another
-  project's name is worse than an empty cell. That is not a hypothetical shape: on the machine
-  this was written on, 146 of the 178 projects in `~/.claude/project-icons.json` have keys past
-  48 characters, most of them worktrees under one parent whose names differ near the *front* —
-  precisely the end that the truncation threw away.
+  project's name is worse than an empty cell. Worktree paths can share a long suffix while
+  differing near the front — precisely the part that truncation throws away. The fixtures in
+  `verify.sh` cover this with synthetic paths.
 - **`health-*.json` never did have one reader.** Clawdline reads it directly rather than probing
   (below), so the truncation was a disagreement between two readers about one filename, in the
-  one file where nothing spawns a producer to paper over it. Nothing under `~/code/` was long
-  enough to hit it on the day it was removed, but
-  `~/code/clawdline-cloud/marketing/marketing-claude` measures 63 characters, and a project like
-  that one is a nested directory away.
+  one file where nothing spawns a producer to paper over it. Nested project directories and
+  worktrees can exceed 48 characters, so every reader must use the full path key.
 
 There is a third reader of that rule and it is easy to miss: `tools/render-statusline.py`, which
 writes fixture files under a temporary HOME and screenshots what the line makes of them. It spelled

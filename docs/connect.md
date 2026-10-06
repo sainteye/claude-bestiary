@@ -59,9 +59,8 @@ In `~/.claude/settings.json`:
 model, permissions, plugins and possibly hooks, and replacing it is a way to end somebody's
 afternoon.
 
-`refreshInterval` is not optional. Without it the line redraws only on an event — measured at
-about twice a second on average with gaps up to 6.4 seconds — and a progress bar that sits still
-looks exactly like a hang.
+`refreshInterval` is not optional. Without it the line redraws only on an event, so a progress
+bar can sit still between events and look like a hang.
 
 ## 3. Register the project
 
@@ -82,8 +81,8 @@ product's logo is a judgement call, and that skill is the procedure for making i
 **Never write `~/.claude/project-icons.json` with an atomic replace of your own.** It is very
 often a symlink into somebody's private repository, and `os.replace()` replaces the *path*, not
 the file the path points at — so the link becomes an ordinary file, the repository's copy stops
-being the one in use, and **neither side reports an error**. That happened for real on
-2026-08-11. `project-icon.py` resolves the link before writing; use it.
+being the one in use, and **neither side reports an error**. `project-icon.py` resolves the link
+before writing; use it.
 
 ## 4. The health check, if this project deploys something
 

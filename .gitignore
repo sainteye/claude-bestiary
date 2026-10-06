@@ -2,10 +2,9 @@
 # incident the moment they appeared — not because anyone expects them to, but because **nothing
 # else would stop them** if they did.
 #
-# ~/.claude holds 2.8 GB of transcripts (including real medical records from rounds of
-# customer-corpus analysis), every prompt you have ever typed, and snapshots of edited files.
-# This repository is deliberately not under there, so in the normal case none of it can arrive;
-# this is the second line, for a mistyped cp or a mistaken symlink.
+# ~/.claude holds private conversation transcripts and snapshots of edited files.
+# Keep this repository outside that directory. These exclusions provide an additional guard
+# against accidentally copying local state into the checkout.
 *.jsonl
 history*
 projects/
@@ -27,7 +26,5 @@ project-icons.json
 __pycache__/
 .DS_Store
 
-# serena's index and its notes about this checkout, written by whichever agent is working here.
-# Not ignored until 2026-08-19, and `memories/` is the sort of place a project's real names end
-# up without anyone deciding they should.
+# Serena's local index and notes can contain private project information.
 .serena/

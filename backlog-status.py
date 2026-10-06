@@ -25,10 +25,9 @@ goes on looking correct.
      "ok": true}
 
 **`source` plus `source_mtime` decides when to recount. Time does not.** This number reads one
-local file, so there is no reason to poll on a TTL — which is what made a change you had just
-saved take up to ten minutes to appear (measured 2026-08-16: thirteen items out of date). The
-repository reports its own `source`, because "which file the backlog lives in" should not have a
-second answer.
+local file, so there is no reason to poll on a TTL, which can leave a saved change invisible
+until the next interval. The repository reports its own `source`, because "which file the backlog
+lives in" should not have a second answer.
 
 Any project whose command prints this shape gets drawn. **`ok: false` exists on purpose**: "this
 repository has no backlog" and "it has one and reading it failed" are not the same thing, and a

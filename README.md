@@ -52,9 +52,8 @@ Then in `~/.claude/settings.json`:
                   "refreshInterval": 2 } }
 ```
 
-`refreshInterval` is not optional. Without it the status line only redraws on an event — measured
-at 0.5 times a second on average, with gaps up to 6.4 seconds — and a deploy's progress bar and
-elapsed time sit still, which looks exactly like a hang.
+`refreshInterval` is not optional. Without it the status line only redraws on an event, so a
+deploy's progress bar and elapsed time can sit still between events, which looks like a hang.
 
 ## What is on the line
 
@@ -105,7 +104,7 @@ the note about `os.replace` below is about.
 ## Why a separate repository and symlinks, rather than `git init ~/.claude`
 
 `~/.claude` holds your transcripts — every prompt you have typed, snapshots of every file you
-have edited, and whatever was in the files you asked about. On this machine that is 2.8 GB.
+have edited, and whatever was in the files you asked about. Keep that local state private.
 
 A `.gitignore` blocklist is **guaranteed to fail eventually**: Claude Code grows new state
 directories on its own schedule — `paste-cache`, `image-cache`, `file-history`, `tasks` and
@@ -116,12 +115,10 @@ prevented here, it is a thing that cannot happen.
 **Resolve the symlink before writing.** `os.replace()` replaces the path, not the file the path
 points at, so an atomic write to `~/.claude/project-icons.json` turns that symlink into a real
 file — after which the version in your repository is no longer the one running, and **neither
-side reports an error**. It happened for real on 2026-08-11, triggered by auto-registering a new
-project, and `./verify.sh` is what caught it.
+side reports an error**. `./verify.sh` checks that installed links still point to this repository.
 
-**A skill's directory cannot be a symlink.** Measured 2026-08-11: Claude Code skipped the
-symlinked directory while scanning `skills/`, and listed the physical backup directory next to it
-as a skill instead. So `install.sh` keeps the directory real and links only `SKILL.md`.
+**Keep a skill's directory real.** Claude Code can skip symlinked directories while scanning
+`skills/`. `install.sh` therefore links only `SKILL.md` inside a physical directory.
 
 ## Service health: a light that is alive
 
@@ -221,29 +218,14 @@ The **`project 45.1%`** cell is one column of this report: what share of this mo
 this project has taken. It sits directly after `7d` on purpose — `7d 95%` says how much is left,
 this says **who spent it**, and you need both to decide anything.
 
-**It deliberately prints no money.** On 2026-08-12, working backwards from the official
-`total_cost_usd` of eight then-running sessions to a unit price for one model gave **$0.45 to
-$25.25 per MTok — a factor of 55**:
-
-| session | equivalent usage | official cost | implied unit price |
-|---|---|---|---|
-| A (never compacted) | 1.41 MTok | $7.20 | $5.11 |
-| B | 5.30 | $28.29 | $5.34 |
-| C (compacted 4 times) | 99.97 | $1,480.86 | $14.81 |
-| D (just compacted) | 11.39 | $5.17 | $0.45 |
-
-At least three reasons it cannot be recovered: `total_cost_usd` **is reset to zero by `/compact`**
-(one session read $32.61 before and $5.07 after, with both halves still in the transcript),
-requests over 200k of context are priced separately, and server-side tools like web search are
-not tokens at all.
-
-**A made-up unit price produces a number that looks precise and can be wrong by 55x, which is
-worse than no number — without one you go and look it up, with one you do not.**
+**It deliberately prints no money.** Transcript token counts do not provide a reliable billing
+total: session cost counters can reset after compaction, pricing can depend on context length,
+and server-side tools can be billed separately from tokens. The report therefore sums usage
+without inferring a unit price. Consult the provider's account usage page for billing information.
 
 **A project is decided once per session, not per record from `cwd`.** After an agent `cd`s into
 `backend/`, every later record's `cwd` is a subdirectory, and deciding per record invents
-`backend` / `frontend` / `terraform` as projects. The first version did that, and `backend`
-reached the top of the table.
+`backend` / `frontend` / `terraform` as projects instead of attributing usage to the repository.
 
 ## A few design notes
 

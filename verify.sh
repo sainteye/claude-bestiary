@@ -169,10 +169,10 @@ def truncating(path):
 # files. `run-` was the first file named this way and these were its checks; `health-` and
 # `backlog-` now share the rule, so they share the checks — one loop over the three, rather
 # than the same paragraph written out three times.
-LONG = "/Users/sainteye/Library/Application Support/Clawdline/worktrees/bestiary/" + "a" * 20
-TAIL = "/worktrees/d710b7de-f565-41e4-a8b8-12177537893a/repo"      # 52 characters, so the part
-TWIN_A = "/Users/sainteye/code/alpha" + TAIL                        # that differs falls outside
-TWIN_B = "/Users/sainteye/code/bravo" + TAIL                        # the last 48 of either
+LONG = "/Users/nobody/Library/Application Support/Example/worktrees/demo/" + "a" * 20
+TAIL = "/worktrees/00000000-0000-4000-8000-000000000000/repo"      # 52 characters, so the part
+TWIN_A = "/Users/nobody/code/alpha" + TAIL                          # that differs falls outside
+TWIN_B = "/Users/nobody/code/bravo" + TAIL                          # the last 48 of either
 
 check("a key longer than 48 characters is not shortened", len(sl.path_key(LONG)) > 48)
 check("the twins would collide under the truncating rule",

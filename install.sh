@@ -35,8 +35,7 @@ link() {
 
 echo "linking from $REPO into $DEST"
 for f in $FILES; do link "$REPO/$f" "$DEST/$f"; done
-# A skill's **directory cannot be a symlink** — measured 2026-08-11: Claude Code skipped the
-# symlinked directory while scanning skills/, and listed the physical backup next to it instead.
+# Claude Code can skip symlinked directories while scanning skills/.
 # Keep the directory real and link only SKILL.md; any open() follows that fine.
 mkdir -p "$DEST/skills/project-icon"
 link "$REPO/skills/project-icon/SKILL.md" "$DEST/skills/project-icon/SKILL.md"
